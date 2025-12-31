@@ -6669,6 +6669,19 @@ async function pickAutoCardFor(seat) {
         const partnerBestLead = partnerLeadOptions.length ? Math.max(...partnerLeadOptions.map(rankIndex)) : -1;
         const partnerCanOvertake = (!partnerHasPlayed) && leadSuit && partnerBestLead > highestLeadRank;
 
+        // No trumps to ruff and we are discarding on defense: prefer to keep honors, pitch lowest spot from safest suit.
+        if (!trumpSuit || !trumpCards.length) {
+            if (!leaderOnOurSide && oppCurrentlyWinning) {
+                const honors = new Set(['A', 'K', 'Q', 'J', 'T']);
+                const discardables = legalPlays
+                    .map(c => ({ c, honor: honors.has(c[0]) }))
+                    .filter(o => !o.honor);
+                if (discardables.length) return sortAsc(discardables.map(o => o.c))[0];
+                // If only honors remain, keep highest controls and shed the lowest honor
+                return sortAsc(legalPlays)[0];
+            }
+        }
+
         // If opponents are currently winning the trick and we have trumps, ruff now with the cheapest winning trump (or any trump if none win).
         if (trumpSuit && trumpCards.length && oppCurrentlyWinning) {
             // If partner is still to play and can likely win the lead suit, conserve trump and discard instead.
