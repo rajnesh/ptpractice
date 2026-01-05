@@ -88,7 +88,7 @@ describe('UI guard: partner cue-bid is forcing one round', () => {
 
         installStubSystem();
 
-        evalInWindow(window, path.join(__dirname, '..', 'js', 'app.js'));
+        evalInWindow(window, path.join(__dirname, '..', 'assets', 'js', 'app.js'));
         window.switchTab = () => { };
         window.initializeSystem();
 

@@ -1,8 +1,8 @@
 /**
  * @jest-environment jsdom
  */
-const { SAYCBiddingSystem } = require('../js/combined-bidding-system');
-const { Bid } = require('../js/bridge-types');
+const { SAYCBiddingSystem } = require('../assets/js/combined-bidding-system');
+const { Bid } = require('../assets/js/bridge-types');
 const fs = require('fs');
 const path = require('path');
 
@@ -35,7 +35,7 @@ describe('Hint chip shows full explanation text', () => {
   test('Opening 1NT hint shows 15–17 explanation rather than "Standard bid"', () => {
     // Load app.js if not already loaded to register global functions
     if (typeof global.window.getRecommendedBid !== 'function') {
-      const src = fs.readFileSync(path.join(__dirname, '..', 'js', 'app.js'), 'utf8');
+      const src = fs.readFileSync(path.join(__dirname, '..', 'assets', 'js', 'app.js'), 'utf8');
       (global.window || global).eval(src);
     }
 
@@ -47,7 +47,7 @@ describe('Hint chip shows full explanation text', () => {
     w.currentHands = w.currentHands || {};
     // Hand string: KQ2=5, QJ2=3, KJ2=4, Q32=2 => 14; add a K somewhere to reach 17 or use A for 18
     // Adjusting to 16 HCP: KQ2=5, QJ2=3, KJ2=4, J32=1 => 13; try KQ2 QJ2 KJ2 KJ2 => 5+3+4+4=16
-    const { Hand } = require('../js/bridge-types');
+    const { Hand } = require('../assets/js/bridge-types');
     w.currentHands.S = new Hand('KQ2 QJ2 KJ2 KJ2');
 
     // Prepare auction state BEFORE calling initializeSystem to avoid random hand generation
@@ -69,7 +69,7 @@ describe('Hint chip shows full explanation text', () => {
 
     // Ensure system is initialized and has the correct hand
     if (!w.system || !w.system.currentAuction) {
-      const { SAYCBiddingSystem } = require('../js/combined-bidding-system');
+      const { SAYCBiddingSystem } = require('../assets/js/combined-bidding-system');
       w.system = new SAYCBiddingSystem();
       // Start the auction so system.currentAuction exists
       w.system.startAuction('S', false, false);

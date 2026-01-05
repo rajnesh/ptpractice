@@ -1,6 +1,6 @@
 /** @jest-environment node */
 
-const { SAYCBiddingSystem } = require('../js/combined-bidding-system');
+const { SAYCBiddingSystem } = require('../assets/js/combined-bidding-system');
 
 // Minimal stubs for global window/Auction used by the bidding system
 if (!global.window) global.window = {};

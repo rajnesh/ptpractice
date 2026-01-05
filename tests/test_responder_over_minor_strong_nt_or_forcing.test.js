@@ -1,4 +1,4 @@
-const { SAYCBiddingSystem } = require('../js/combined-bidding-system.js');
+const { SAYCBiddingSystem } = require('../assets/js/combined-bidding-system.js');
 
 function makeHand(spec, hcp) {
   // spec: "S H D C" using letters; length is characters count; hcp explicit

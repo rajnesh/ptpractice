@@ -1,5 +1,5 @@
-const { SAYCBiddingSystem } = require('../js/combined-bidding-system');
-const { Bid } = require('../js/bridge-types');
+const { SAYCBiddingSystem } = require('../assets/js/combined-bidding-system');
+const { Bid } = require('../assets/js/bridge-types');
 const { makeHandFromPattern } = require('./test-helpers');
 
 // Helper: set up system with ourSeat=E and dealer reseated to W, then add tokens

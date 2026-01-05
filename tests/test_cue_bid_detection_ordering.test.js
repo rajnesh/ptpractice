@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 
 function evalApp(win) {
-    const src = fs.readFileSync(path.join(__dirname, '..', 'js', 'app.js'), 'utf8');
+    const src = fs.readFileSync(path.join(__dirname, '..', 'assets', 'js', 'app.js'), 'utf8');
     win.eval(`(function(){${src}\nwindow.__cbTestHooks = { isCueBidOfOpponentsSuit };}).call(window);`);
 }
 

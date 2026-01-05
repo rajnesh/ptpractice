@@ -1,4 +1,4 @@
-const { SAYCBiddingSystem } = require('../js/combined-bidding-system.js');
+const { SAYCBiddingSystem } = require('../assets/js/combined-bidding-system.js');
 
 function makeCard(rank, suit) { return { rank, suit }; }
 function makeHand({ S=0, H=0, D=0, C=0, hcp=0, dist=0, stopperSuit=null, stopperRank='A' } = {}) {

@@ -1,6 +1,6 @@
 const { makeHandFromPattern } = require('./test-helpers');
-const { SAYCBiddingSystem } = require('../js/combined-bidding-system');
-const { Bid } = require('../js/bridge-types');
+const { SAYCBiddingSystem } = require('../assets/js/combined-bidding-system');
+const { Bid } = require('../assets/js/bridge-types');
 
 /**
  * Responder 2NT (12–14) over 1m with no 4-card major and no 4-card support.

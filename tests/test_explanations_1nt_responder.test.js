@@ -1,5 +1,5 @@
-const { SAYCBiddingSystem } = require('../js/combined-bidding-system');
-const { Bid, Auction } = require('../js/bridge-types');
+const { SAYCBiddingSystem } = require('../assets/js/combined-bidding-system');
+const { Bid, Auction } = require('../assets/js/bridge-types');
 
 describe('1NT responder explanation', () => {
   test('1NT response over partner 1H includes no 3-card wording', () => {

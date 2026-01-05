@@ -1,4 +1,4 @@
-const { SAYCBiddingSystem } = require('../js/combined-bidding-system');
+const { SAYCBiddingSystem } = require('../assets/js/combined-bidding-system');
 const { makeTestHand } = require('./test-helpers');
 
 /**

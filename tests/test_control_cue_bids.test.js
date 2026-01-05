@@ -6,8 +6,8 @@
 // Import test utilities
 if (typeof require !== 'undefined') {
     const { TestRunner, makeHandFromPattern, makeHandFromDistribution } = require('./test-helpers.js');
-    const { BiddingSystem, SAYCBiddingSystem, ConventionManager } = require('../js/combined-bidding-system.js');
-    const { Bid } = require('../js/bridge-types.js');
+    const { BiddingSystem, SAYCBiddingSystem, ConventionManager } = require('../assets/js/combined-bidding-system.js');
+    const { Bid } = require('../assets/js/bridge-types.js');
 }
 
 class ControlCueBidsTestSuite {

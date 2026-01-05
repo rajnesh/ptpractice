@@ -6,7 +6,7 @@ const Module = require('module');
 
 const realReadFileSync = fs.readFileSync;
 const realGfsReadFileSync = gfs.readFileSync;
-const appPath = path.normalize(path.join(__dirname, '..', 'js', 'app.js'));
+const appPath = path.normalize(path.join(__dirname, '..', 'assets', 'js', 'app.js'));
 
 function buildPatchedSource() {
     const original = realReadFileSync(appPath, 'utf8');
@@ -46,7 +46,7 @@ gfs.readFileSync = function patchedGracefulReadFileSync(filePath, options) {
     return realGfsReadFileSync.apply(gfs, arguments);
 };
 
-// Also hook Node's CJS loader so require('../js/app.js') receives the patched source
+// Also hook Node's CJS loader so require('../assets/js/app.js') receives the patched source
 const originalJsLoader = Module._extensions['.js'];
 Module._extensions['.js'] = function patchedModuleLoader(module, filename) {
     const normalized = path.normalize(filename);

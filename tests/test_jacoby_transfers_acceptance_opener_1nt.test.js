@@ -1,5 +1,5 @@
-const { SAYCBiddingSystem } = require('../js/combined-bidding-system');
-const { Auction, Bid } = require('../js/bridge-types');
+const { SAYCBiddingSystem } = require('../assets/js/combined-bidding-system');
+const { Auction, Bid } = require('../assets/js/bridge-types');
 const { makeHandFromPattern } = require('./test-helpers');
 
 /**

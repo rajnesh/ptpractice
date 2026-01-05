@@ -69,7 +69,7 @@ function loadAppWithStubs(legalityMap) {
   window.SAYCBiddingSystem = class { constructor() { this._impl = new FakeSystem(legalityMap); } isLegal(bid) { return this._impl.isLegal(bid); } startAuction() {} };
 
   // Evaluate app.js so globals like initializeSystem/startAuction/updateBidButtons are attached to window
-  evalInWindow(window, path.join(__dirname, '..', 'js', 'app.js'));
+  evalInWindow(window, path.join(__dirname, '..', 'assets', 'js', 'app.js'));
 
   // Neutralize tab switching helpers that expect full DOM
   window.switchTab = () => {};

@@ -1,6 +1,6 @@
 const { makeHandFromPattern } = require('./test-helpers');
-const { SAYCBiddingSystem } = require('../js/combined-bidding-system');
-const { Bid, Auction } = require('../js/bridge-types');
+const { SAYCBiddingSystem } = require('../assets/js/combined-bidding-system');
+const { Bid, Auction } = require('../assets/js/bridge-types');
 
 /**
  * Regression: After S PASS; W 1S; N 2H; E ?, East must not bid 2C (illegal under 2H),

@@ -3,8 +3,8 @@
  */
 
 const { makeTestHand } = require('./test-helpers');
-const { SAYCBiddingSystem } = require('../js/combined-bidding-system');
-const { Bid } = require('../js/bridge-types');
+const { SAYCBiddingSystem } = require('../assets/js/combined-bidding-system');
+const { Bid } = require('../assets/js/bridge-types');
 
 function setupAuctionWithDealer(system, sequence, dealer = 'S', ourSeat = 'W') {
   system.startAuction(ourSeat);

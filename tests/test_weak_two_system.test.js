@@ -1,6 +1,6 @@
 const { makeHandFromPattern, makeTestHand } = require('./test-helpers');
-const { SAYCBiddingSystem } = require('../js/combined-bidding-system');
-const { Bid, Auction } = require('../js/bridge-types');
+const { SAYCBiddingSystem } = require('../assets/js/combined-bidding-system');
+const { Bid, Auction } = require('../assets/js/bridge-types');
 
 /**
  * Comprehensive tests for Weak Two openings and responses, including 2NT feature ask.

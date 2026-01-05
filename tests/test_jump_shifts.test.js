@@ -3,8 +3,8 @@
  */
 const fs = require('fs');
 const path = require('path');
-const { SAYCBiddingSystem } = require('../js/combined-bidding-system');
-const { Bid } = require('../js/bridge-types');
+const { SAYCBiddingSystem } = require('../assets/js/combined-bidding-system');
+const { Bid } = require('../assets/js/bridge-types');
 const { makeHandFromPattern } = require('./test-helpers');
 
 function evalInWindow(win, filePath) {
@@ -91,7 +91,7 @@ describe('General Settings footnote for jump shifts', () => {
     `;
 
     // Load app UI; initializeSystem will create general settings
-    evalInWindow(window, path.join(__dirname, '..', 'js', 'app.js'));
+    evalInWindow(window, path.join(__dirname, '..', 'assets', 'js', 'app.js'));
     if (typeof window.initializeSystem === 'function') {
       window.initializeSystem();
     }

@@ -1,6 +1,6 @@
 const { makeHandFromPattern, buildAuction } = require('./test-helpers');
-const { SAYCBiddingSystem } = require('../js/combined-bidding-system');
-const { Bid, Auction } = require('../js/bridge-types');
+const { SAYCBiddingSystem } = require('../assets/js/combined-bidding-system');
+const { Bid, Auction } = require('../assets/js/bridge-types');
 
 /**
  * Mirrors the observed UI sequence:

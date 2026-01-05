@@ -1,5 +1,5 @@
 const { makeHandFromPattern } = require('./test-helpers');
-const { SAYCBiddingSystem } = require('../js/combined-bidding-system');
+const { SAYCBiddingSystem } = require('../assets/js/combined-bidding-system');
 
 /**
  * Balanced-shape toggle tests for including 5-4-2-2 as balanced.

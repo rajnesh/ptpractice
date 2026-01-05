@@ -1,5 +1,5 @@
-const { SAYCBiddingSystem } = require('../js/combined-bidding-system');
-const { Bid, Auction, Hand } = require('../js/bridge-types');
+const { SAYCBiddingSystem } = require('../assets/js/combined-bidding-system');
+const { Bid, Auction, Hand } = require('../assets/js/bridge-types');
 
 /**
  * Repro for auction: S Pass, W Pass, N 1S, E ?

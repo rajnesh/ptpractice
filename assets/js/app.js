@@ -22,6 +22,8 @@ let auctionHistory = [];
 let currentAuction = [];
 let currentTurn = null;
 let dealer = 'S';
+// Track whether South has already taken their first action this auction
+let southHasBidThisAuction = false;
 // Capture of console output scoped to the Auction tab
 let auctionConsoleLog = [];
 let __originalConsole = null;
@@ -59,16 +61,215 @@ function startAuctionConsoleCapture() {
     } catch (e) {
         try { __originalConsole?.warn('startAuctionConsoleCapture failed', e); } catch (_) { }
     }
-    function computeTotalPoints(hand) {
-        try {
-            const hcp = typeof hand?.hcp === 'number' ? hand.hcp : 0;
-            let dp = 0;
-            try { dp = calculateShortnessPoints(hand); } catch (_) { dp = 0; }
-            return hcp + dp;
-        } catch (_) {
-            return 0;
+}
+
+function computeTotalPoints(hand) {
+    try {
+        const hcp = typeof hand?.hcp === 'number' ? hand.hcp : 0;
+        let dp = 0;
+        try { dp = calculateShortnessPoints(hand); } catch (_) { dp = 0; }
+        return hcp + dp;
+    } catch (_) {
+        return 0;
+    }
+}
+
+// Inline guard helpers (migrated from the former auction-logic-guards.js)
+function sameSide(seatA, seatB) {
+    if (!seatA || !seatB) return false;
+    const tag = (s) => (s === 'N' || s === 'S') ? 'NS' : 'EW';
+    return tag(seatA) === tag(seatB);
+}
+
+function applyResponderMajorGuard({
+    recommendedBid,
+    explanation,
+    forcedBid,
+    currentTurn,
+    auctionHistory,
+    hand,
+    isValidSystemBid,
+    computeTotalPoints: computeTotalPointsFn
+}) {
+    if (forcedBid || !recommendedBid || recommendedBid.token !== 'PASS' || !currentTurn || !Array.isArray(auctionHistory) || auctionHistory.length < 2) {
+        return { recommendedBid, explanation };
+    }
+    // Prefer a long natural major over a model double when we have values and shape
+    let modelOverrideApplied = false;
+    const alreadyBidContract = auctionHistory.some(e => e?.position === currentTurn && /^[1-7]/.test(e?.bid?.token || ''));
+    if (alreadyBidContract) return { recommendedBid, explanation };
+
+    const partnerSeat = partnerOf(currentTurn);
+    const partnerLast = auctionHistory.slice().reverse().find(e => e?.position === partnerSeat && /^[1-7][CDHS]$/.test(e?.bid?.token || ''));
+    if (!partnerLast) return { recommendedBid, explanation };
+
+    const partnerTok = partnerLast.bid.token;
+    const partnerSuit = partnerTok.slice(-1);
+    const handSpades = hand?.lengths?.S || 0;
+    const handHearts = hand?.lengths?.H || 0;
+    const hcp = typeof hand?.hcp === 'number' ? hand.hcp : 0;
+    const oppSeats = (currentTurn === 'N' || currentTurn === 'S') ? ['E', 'W'] : ['N', 'S'];
+    const opponentIntervened = auctionHistory.some(e => oppSeats.includes(e?.position) && /^[1-7](C|D|H|S|NT)$/.test(e?.bid?.token || ''));
+    const requiredLen = opponentIntervened ? 5 : 4;
+    const totalPoints = (typeof computeTotalPointsFn === 'function') ? computeTotalPointsFn(hand) : hcp;
+    const partnerOpenedMinor = partnerSuit === 'C' || partnerSuit === 'D';
+    const partnerOpenedHeart = partnerSuit === 'H';
+    const minPointsForLevel = (lvl) => (lvl >= 2 ? 10 : 6);
+    const canBidSpades = (
+        handSpades >= requiredLen &&
+        totalPoints >= minPointsForLevel(1) &&
+        (
+            partnerOpenedMinor ||
+            partnerOpenedHeart
+        )
+    );
+    const canBidHearts = (!partnerOpenedHeart && partnerSuit !== 'H' && handHearts >= requiredLen && totalPoints >= minPointsForLevel(1) && partnerOpenedMinor);
+
+    let guardedBid = null;
+    let guardedExplanation = explanation;
+    if (canBidSpades) {
+        guardedBid = { token: '1S' };
+        guardedExplanation = partnerOpenedHeart
+            ? `1S response: ${requiredLen}+ spades and 6+ HCP over partner's 1H (show major instead of passing${opponentIntervened ? ' after interference' : ''})`
+            : `1S response: ${requiredLen}+ spades and 6+ HCP (show major instead of passing${opponentIntervened ? ' after interference' : ''})`;
+    } else if (canBidHearts && partnerOpenedMinor) {
+        guardedBid = { token: '1H' };
+        guardedExplanation = `1H response: ${requiredLen}+ hearts and 6+ HCP (show major instead of passing${opponentIntervened ? ' after interference' : ''})`;
+    } else if (partnerOpenedMinor && !opponentIntervened && handSpades < 4 && handHearts < 4) {
+        if (hcp >= 5 && hcp <= 10) {
+            guardedBid = { token: '1NT' };
+            guardedExplanation = '1NT response: 5-10 HCP, no 4-card major over partner’s minor';
+        } else if (hcp >= 11 && hcp <= 12) {
+            guardedBid = { token: '2NT' };
+            guardedExplanation = '2NT response: 11-12 HCP, no 4-card major over partner’s minor';
+        } else if (hcp >= 13 && hcp <= 14) {
+            guardedBid = { token: '3NT' };
+            guardedExplanation = '3NT response: 13-14 HCP, no 4-card major over partner’s minor';
         }
     }
+
+    if (guardedBid && typeof isValidSystemBid === 'function' && !isValidSystemBid(guardedBid.token, currentTurn)) {
+        guardedBid = null;
+    }
+
+    if (guardedBid) {
+        return { recommendedBid: guardedBid, explanation: guardedExplanation };
+    }
+    return { recommendedBid, explanation };
+}
+
+function applyOvercallLengthGuard({
+    recommendedBid,
+    explanation,
+    forcedBid,
+    currentTurn,
+    auctionHistory,
+    hand,
+    isOpponentPosition
+}) {
+    if (forcedBid || !recommendedBid || !/^[1-2][CDHS]$/.test(recommendedBid.token)) {
+        return { recommendedBid, explanation };
+    }
+    if (!currentTurn || !Array.isArray(auctionHistory)) {
+        return { recommendedBid, explanation };
+    }
+
+    const firstContract = auctionHistory.find(e => /^[1-7]/.test(e?.bid?.token || ''));
+    const ourSideHasContract = auctionHistory.some(e => /^[1-7]/.test(e?.bid?.token || '') && sameSide(e.position, currentTurn));
+    const weHaveActed = auctionHistory.some(e => sameSide(e.position, currentTurn) && /^[1-7]/.test(e?.bid?.token || ''));
+    const overcallingOppener = firstContract && typeof isOpponentPosition === 'function' && isOpponentPosition(firstContract.position, currentTurn) && !ourSideHasContract && !weHaveActed;
+
+    if (!overcallingOppener) return { recommendedBid, explanation };
+
+    const suit = recommendedBid.token.replace(/^[1-2]/, '');
+    const openingSuit = firstContract ? (firstContract.bid?.token || '').replace(/^[1-7]/, '') : null;
+    // Skip length guard for cue-bids of opener's suit (e.g., Michaels)
+    if (openingSuit && suit === openingSuit) {
+        return { recommendedBid, explanation };
+    }
+
+    const suitLen = (hand?.lengths && hand.lengths[suit]) || 0;
+    const minLen = 5;
+    if (suitLen < minLen) {
+        return {
+            recommendedBid: { token: 'PASS' },
+            explanation: `Pass (need ${minLen}+ cards to overcall ${recommendedBid.token})`
+        };
+    }
+
+    // HCP floor for direct overcalls of opener
+    const hcp = typeof hand?.hcp === 'number' ? hand.hcp : 0;
+    const minHcp = 10;
+    if (hcp < minHcp) {
+        return {
+            recommendedBid: { token: 'PASS' },
+            explanation: `Pass (need ${minHcp}+ total points to overcall opener)`
+        };
+    }
+    return { recommendedBid, explanation };
+}
+
+// Compute the cheapest legal overcall level for a suit over an opening contract
+function computeCheapestOvercallToken(overcallSuit, openingToken) {
+    if (!overcallSuit || !openingToken || !/^[1-7](C|D|H|S|NT)$/.test(openingToken)) return null;
+    const order = { C: 0, D: 1, H: 2, S: 3, NT: 4 };
+    const openingLevel = parseInt(openingToken[0], 10) || 1;
+    const openingSuit = openingToken.slice(1);
+    if (!order.hasOwnProperty(overcallSuit) || !order.hasOwnProperty(openingSuit)) return null;
+    let level = openingLevel;
+    if (order[overcallSuit] <= order[openingSuit]) {
+        level = Math.min(7, openingLevel + 1);
+    }
+    return `${level}${overcallSuit}`;
+}
+
+function applyTwoLevelFreeBidGuard({
+    recommendedBid,
+    explanation,
+    forcedBid,
+    currentTurn,
+    auctionHistory,
+    hand
+}) {
+    if (forcedBid || !recommendedBid || !currentTurn || !Array.isArray(auctionHistory)) {
+        return { recommendedBid, explanation };
+    }
+
+    const tok = recommendedBid.token || '';
+    const isTwoLevelSuit = /^[2][CDHS]$/.test(tok);
+    if (!isTwoLevelSuit) return { recommendedBid, explanation };
+
+    const hcp = typeof hand?.hcp === 'number' ? hand.hcp : 0;
+    const sideTag = (s) => (s === 'N' || s === 'S') ? 'NS' : 'EW';
+    const sameSideAsCurrent = (seat) => seat && sideTag(seat) === sideTag(currentTurn);
+
+    const havePriorPass = auctionHistory.some(e => e?.position === currentTurn && (e?.bid?.token || '') === 'PASS');
+    const partnerLastContract = auctionHistory.slice().reverse().find(e => e && e.position !== currentTurn && sameSideAsCurrent(e.position) && /^[1-7][CDHS]$/.test(e?.bid?.token || ''));
+    const partnerSuit = partnerLastContract ? partnerLastContract.bid.token.replace(/^[1-7]/, '') : null;
+    const ourSuit = tok.replace(/^[1-7]/, '');
+    const support = hand?.lengths ? (hand.lengths[partnerSuit] || 0) : 0;
+    const isRaiseOfPartnerSuit = !!partnerSuit && ourSuit === partnerSuit;
+
+    if (havePriorPass && partnerLastContract && hcp <= 7) {
+        return {
+            recommendedBid: { token: 'PASS' },
+            explanation: 'Pass - insufficient values to introduce a new suit at the two-level after passing earlier'
+        };
+    }
+
+    const partnerLastAction = auctionHistory.slice().reverse().find(e => e && e.position !== currentTurn && sameSideAsCurrent(e.position) && e?.bid?.token && e.bid.token !== 'PASS');
+    if (partnerLastAction && hcp < 8) {
+        // Allow modest two-level raises of partner's suit with at least 3-card support and 6+ HCP
+        if (isRaiseOfPartnerSuit && support >= 3 && hcp >= 6) {
+            return { recommendedBid, explanation };
+        }
+        return {
+            recommendedBid: { token: 'PASS' },
+            explanation: 'Pass - need stronger values for a free two-level suit bid'
+        };
+    }
+
+    return { recommendedBid, explanation };
 }
 
 function stopAuctionConsoleCapture() {
@@ -84,17 +285,18 @@ function stopAuctionConsoleCapture() {
         try { console.warn('stopAuctionConsoleCapture failed', e); } catch (_) { }
     }
 }
+
 // Vulnerability defaults: None (ns=false, ew=false)
 let vulnerability = { ns: false, ew: false };
 
-// Conventions UI state (Active/Practice tabs)
+// Convention UI state containers (must be declared for module scope)
 let availableConventions = {};
-let enabledConventions = {};
 let conventionCategories = {};
-let mutuallyExclusiveGroups = [];
+let enabledConventions = {};
 let practiceConventions = [];
-let selectedPracticeConventions = {}; // map categoryKey -> selected convention name
-// Initialize the engine and UI when the page is ready
+let selectedPracticeConventions = {};
+let mutuallyExclusiveGroups = [];
+
 function initializeSystem() {
     try {
         // Render General Settings immediately so static notes are visible without waiting
@@ -117,14 +319,12 @@ function initializeSystem() {
         (async () => {
             try {
                 // --- Load the bidding model ---
-                pageLog("Initializing bidding model...");
+                pageLog('Initializing bidding model...');
                 try {
-                    // The paths point to the directories where your converted models will be.
                     await loadBiddingModel('./models/bid_rl_model/model.json', './bid_tokens.json');
-                    pageLog("Bidding model initialized successfully.");
+                    pageLog('Bidding model initialized successfully.');
                 } catch (error) {
-                    console.error("Failed to initialize bidding model:", error);
-                    // Display an error to the user in the UI.
+                    console.error('Failed to initialize bidding model:', error);
                 }
                 // --- End model loading ---
 
@@ -176,10 +376,21 @@ function initializeSystem() {
             // Attach Download Log button handler if present
             try {
                 const dl = document.getElementById('playDownloadLogBtn');
+                const showPlayDownloadLog = (() => {
+                    try {
+                        if (typeof window !== 'undefined' && typeof window.__showPlayDownloadLog === 'boolean') {
+                            return !!window.__showPlayDownloadLog;
+                        }
+                    } catch (_) { /* ignore overrides */ }
+                    return DEFAULT_PLAY_DOWNLOAD_LOG_VISIBLE;
+                })();
                 if (dl) {
-                    dl.addEventListener('click', () => {
-                        try { downloadPlayLog(); } catch (e) { console.warn('downloadPlayLog failed', e); }
-                    });
+                    dl.style.display = showPlayDownloadLog ? '' : 'none';
+                    if (showPlayDownloadLog) {
+                        dl.addEventListener('click', () => {
+                            try { downloadPlayLog(); } catch (e) { console.warn('downloadPlayLog failed', e); }
+                        });
+                    }
                 }
             } catch (_) { }
             // Attach Auction download button handler if present
@@ -638,7 +849,7 @@ function displayHands() {
         const auctionStatus = document.getElementById('auctionStatus');
         if (auctionStatus) {
             // Reset to the default prompt shown on initial load
-            auctionStatus.textContent = 'Click "Start Auction" to begin bidding.';
+            auctionStatus.textContent = 'Click "Start Bidding" to begin the auction.';
             auctionStatus.className = 'alert alert-info';
         }
     } catch (cleanupErr) {
@@ -781,6 +992,7 @@ function resetAuctionForNewDeal() {
         auctionHistory = [];
         currentAuction = [];
         currentTurn = null;
+        southHasBidThisAuction = false;
 
         // Engine state (if present)
         try {
@@ -806,7 +1018,10 @@ function resetAuctionForNewDeal() {
         }
 
         const startAuctionBtn = document.getElementById('startAuctionBtn');
-        if (startAuctionBtn) startAuctionBtn.style.display = 'inline-block';
+        if (startAuctionBtn) {
+            startAuctionBtn.style.display = 'inline-block';
+            startAuctionBtn.textContent = 'Start Bidding';
+        }
 
         // Remove any prior "auction ended" banner rows, if still present
         try {
@@ -965,6 +1180,7 @@ function startNewAuction() {
         auctionHistory = [];
         currentAuction = [];
         auctionActive = true;
+        southHasBidThisAuction = false;
         // Start capturing console output for Auction tab
         try { startAuctionConsoleCapture(); } catch (_) { }
         // Lock Dealer/Vulnerability controls while auction is active
@@ -1097,6 +1313,7 @@ function isPartnerResponse(auctionLength) {
 // Set window.__debugPageLogs or window.__debugAuctionLogs to true to enable ad-hoc logging without code changes.
 const DEFAULT_PAGE_DEBUG = false;
 const DEFAULT_AUCTION_DEBUG = true;
+const DEFAULT_PLAY_DOWNLOAD_LOG_VISIBLE = false;
 
 function pageLog(...args) {
     try {
@@ -1249,6 +1466,15 @@ function makeBid(bidString) {
         // Sanity-check: avoid stale/mismatched labels (e.g., leftover "double" text on suit bids)
         explanation = normalizeExplanationForBid(bid, explanation, currentAuction, 'S');
 
+        // After South's first action, hide the Hint button for the rest of this auction
+        if (!southHasBidThisAuction) {
+            southHasBidThisAuction = true;
+            try {
+                const hintBtn = document.getElementById('hintBtn');
+                if (hintBtn) hintBtn.style.display = 'none';
+            } catch (_) { }
+        }
+
         auctionHistory.push({
             position: 'S',
             bid: bid,
@@ -1320,13 +1546,12 @@ function checkForcedResponse(hand, auction) {
     const strong2cOn = !!(system?.conventions?.isEnabled?.('strong_2_clubs', 'opening_bids'));
     auctionLog('Strong 2C enabled:', strong2cOn);
 
-    // Strong 2C forcing response - only for PARTNER, not opponents
-    const firstBidIs2C = auction.length >= 1 && auction[0].token === '2C';
-
     // Determine current seat robustly using dealer and TURN_ORDER when available.
     // Fall back to the original simple position math if dealer/TURN_ORDER are not available.
     let currentSeat = null;
     let isPartnerToOpener = false;
+    let openerSeat = null;
+    let openerBid = null;
     try {
         const order = (window.Auction && Array.isArray(window.Auction.TURN_ORDER)) ? window.Auction.TURN_ORDER : ['N', 'E', 'S', 'W'];
         const dealerSeat = (typeof dealer !== 'undefined' && dealer) ? dealer : (order[0] || 'S');
@@ -1334,10 +1559,13 @@ function checkForcedResponse(hand, auction) {
         currentSeat = order[(idx + (auction.length || 0)) % 4];
 
         // Find the opener (first non-pass contract bid) and compute its partner
-        let openerSeat = null;
         for (let i = 0; i < (auction.length || 0); i++) {
             const b = auction[i];
-            if (b && b.token && b.token !== 'PASS') { openerSeat = b.seat || null; break; }
+            if (b && b.token && /^[1-7]/.test(b.token)) {
+                openerBid = b;
+                openerSeat = b.seat || order[(idx + i) % 4] || null;
+                break;
+            }
         }
         if (openerSeat) {
             const openerIdx = order.indexOf(openerSeat) >= 0 ? order.indexOf(openerSeat) : null;
@@ -1352,8 +1580,8 @@ function checkForcedResponse(hand, auction) {
         isPartnerToOpener = currentPosition === 3;
         currentSeat = null;
     }
-
-    auctionLog('First bid is 2C?', firstBidIs2C);
+    const openerIsStrongTwoC = !!(openerBid && openerBid.token === '2C');
+    auctionLog('Opener bid is 2C?', openerIsStrongTwoC, 'openerSeat=', openerSeat);
     auctionLog('Is partner responding?', isPartnerToOpener, 'currentSeat=', currentSeat);
 
     // Check if Strong 2C sequence is still forcing (not yet reached game level)
@@ -1371,7 +1599,8 @@ function checkForcedResponse(hand, auction) {
     auctionLog('Strong 2C enabled (effective):', strongTwoClubsEnabled);
     auctionLog('Has reached game level?', hasReachedGame);
 
-    if (firstBidIs2C && isPartnerToOpener && strongTwoClubsEnabled && !hasReachedGame) {
+    let forcedBid = null;
+    if (openerIsStrongTwoC && isPartnerToOpener && strongTwoClubsEnabled && !hasReachedGame) {
         auctionLog('Strong 2C sequence - FORCING response required (must continue to game)');
 
         // Must respond - cannot pass until game is reached
@@ -1391,7 +1620,6 @@ function checkForcedResponse(hand, auction) {
         auctionLog('Last non-pass bid:', lastBid?.token);
 
         // Determine forced response based on auction sequence and hand strength
-        let forcedBid;
 
         if (!lastBid || lastBid.token === '2C') {
             // First response to 2C opening
@@ -1572,378 +1800,564 @@ async function makeSystemBid() {
         const explanationContext = (system && system.currentAuction) ? system.currentAuction : { bids: currentAuction, dealer: dealerSeat };
         let explanation = recommendedBid.conventionUsed || getConventionExplanation(recommendedBid, explanationContext, currentTurn) || '';
 
-        // Responder safeguard: with game-going strength (>=12 HCP) after having already bid,
-        // do not allow a passive PASS before reaching game. Promote to a game contract based on context.
-        try {
-            if (!forcedBid && recommendedBid && recommendedBid.token === 'PASS') {
-                const partnerSeat = partnerOf(currentTurn);
-                const ourLast = auctionHistory.slice().reverse().find(e => e.position === currentTurn && e?.bid?.token && e.bid.token !== 'PASS');
-                const partnerLastContract = auctionHistory.slice().reverse().find(e => e.position === partnerSeat && /^[1-7]/.test(e?.bid?.token || ''));
-                const auctionReachedGame = (currentAuction || []).some(b => {
-                    const t = b?.token || 'PASS';
-                    return t === '3NT' || /^[4-7]/.test(t);
-                });
+        // When tests inject a recommendation, skip most mutation guards to honor the override,
+        // but still run the final cue-force safety below.
+        const skipGuardMutations = !!hasTestOverride;
 
-                // If opponents have acted between our last bid and partner's last contract, treat the auction as competitive
-                // and avoid auto-promoting partner's competitive raise to a game force.
-                let contestedSinceOurLast = false;
-                try {
-                    const findLastIndex = (arr, pred) => { for (let i = arr.length - 1; i >= 0; i--) { if (pred(arr[i], i)) return i; } return -1; };
-                    const ourIdx = findLastIndex(currentAuction, (b) => b && b.seat === currentTurn && /^[1-7]/.test(b.token || ''));
-                    const partnerIdx = findLastIndex(currentAuction, (b) => b && b.seat === partnerSeat && /^[1-7]/.test(b.token || ''));
-                    if (ourIdx >= 0 && partnerIdx > ourIdx) {
-                        for (let i = ourIdx + 1; i < partnerIdx; i++) {
-                            const b = currentAuction[i];
-                            if (b && b.seat && b.seat !== currentTurn && b.seat !== partnerSeat && /^[1-7]/.test(b.token || '')) {
-                                contestedSinceOurLast = true;
-                                break;
+        if (!skipGuardMutations) {
+            // Responder safeguard: with game-going strength (>=12 HCP) after having already bid,
+            // do not allow a passive PASS before reaching game. Promote to a game contract based on context.
+            try {
+                if (!forcedBid && recommendedBid && recommendedBid.token === 'PASS') {
+                    const partnerSeat = partnerOf(currentTurn);
+                    const ourLast = auctionHistory.slice().reverse().find(e => e.position === currentTurn && e?.bid?.token && e.bid.token !== 'PASS');
+                    const partnerLastContract = auctionHistory.slice().reverse().find(e => e.position === partnerSeat && /^[1-7]/.test(e?.bid?.token || ''));
+                    const auctionReachedGame = (currentAuction || []).some(b => {
+                        const t = b?.token || 'PASS';
+                        return t === '3NT' || /^[4-7]/.test(t);
+                    });
+
+                    // If opponents have acted between our last bid and partner's last contract, treat the auction as competitive
+                    // and avoid auto-promoting partner's competitive raise to a game force.
+                    let contestedSinceOurLast = false;
+                    try {
+                        const findLastIndex = (arr, pred) => { for (let i = arr.length - 1; i >= 0; i--) { if (pred(arr[i], i)) return i; } return -1; };
+                        const ourIdx = findLastIndex(currentAuction, (b) => b && b.seat === currentTurn && /^[1-7]/.test(b.token || ''));
+                        const partnerIdx = findLastIndex(currentAuction, (b) => b && b.seat === partnerSeat && /^[1-7]/.test(b.token || ''));
+                        if (ourIdx >= 0 && partnerIdx > ourIdx) {
+                            for (let i = ourIdx + 1; i < partnerIdx; i++) {
+                                const b = currentAuction[i];
+                                if (b && b.seat && b.seat !== currentTurn && b.seat !== partnerSeat && /^[1-7]/.test(b.token || '')) {
+                                    contestedSinceOurLast = true;
+                                    break;
+                                }
                             }
                         }
-                    }
-                } catch (_) { contestedSinceOurLast = false; }
+                    } catch (_) { contestedSinceOurLast = false; }
 
-                const ourLastToken = ourLast?.bid?.token || '';
-                const partnerToken = partnerLastContract?.bid?.token || '';
-                const partnerLevel = parseInt(partnerToken[0], 10) || 0;
-                const partnerSuit = partnerToken.replace(/^[1-7]/, '') || null;
-                const ourLastSuit = (/^[1-7]/.test(ourLastToken || '')) ? ourLastToken.replace(/^[1-7]/, '') : null;
-                const partnerSimpleRaise = (!!ourLastSuit && partnerSuit === ourLastSuit && partnerLevel === 2);
-                const partnerInviteOrBetter = partnerLevel >= 3 || partnerToken === '2NT' || partnerToken === '3NT';
-                const strongHandForcing = (hand.hcp || 0) >= 15 && !partnerSimpleRaise;
-                const hasMinGameValues = (hand.hcp || 0) >= 12; // avoid forcing to game with sub-invitational values
-                const shouldForceGame = ourLast && partnerLastContract && !auctionReachedGame && !partnerSimpleRaise && !contestedSinceOurLast && ((partnerInviteOrBetter && hasMinGameValues) || strongHandForcing);
+                    const ourLastToken = ourLast?.bid?.token || '';
+                    const partnerToken = partnerLastContract?.bid?.token || '';
+                    const partnerLevel = parseInt(partnerToken[0], 10) || 0;
+                    const partnerSuit = partnerToken.replace(/^[1-7]/, '') || null;
+                    const ourLastSuit = (/^[1-7]/.test(ourLastToken || '')) ? ourLastToken.replace(/^[1-7]/, '') : null;
+                    const partnerSimpleRaise = (!!ourLastSuit && partnerSuit === ourLastSuit && partnerLevel === 2);
+                    const partnerInviteOrBetter = partnerLevel >= 3 || partnerToken === '2NT' || partnerToken === '3NT';
+                    const strongHandForcing = (hand.hcp || 0) >= 15 && !partnerSimpleRaise;
+                    const hasMinGameValues = (hand.hcp || 0) >= 12; // avoid forcing to game with sub-invitational values
+                    const shouldForceGame = ourLast && partnerLastContract && !auctionReachedGame && !partnerSimpleRaise && !contestedSinceOurLast && ((partnerInviteOrBetter && hasMinGameValues) || strongHandForcing);
 
-                if (shouldForceGame) {
-                    const suit = partnerSuit;
-                    const hasSupport = hand.lengths && suit && hand.lengths[suit] >= 3;
-                    if (suit === 'H' || suit === 'S') {
-                        if (hasSupport) {
-                            recommendedBid = new window.Bid(`4${suit}`);
-                            explanation = 'Game raise with game-forcing values';
+                    if (shouldForceGame) {
+                        const suit = partnerSuit;
+                        const hasSupport = hand.lengths && suit && hand.lengths[suit] >= 3;
+                        if (suit === 'H' || suit === 'S') {
+                            if (hasSupport) {
+                                recommendedBid = new window.Bid(`4${suit}`);
+                                explanation = 'Game raise with game-forcing values';
+                            } else {
+                                recommendedBid = new window.Bid('3NT');
+                                explanation = 'Game try with game-forcing values';
+                            }
                         } else {
+                            // For minor/NT contexts, steer to 3NT as a practical game choice
                             recommendedBid = new window.Bid('3NT');
                             explanation = 'Game try with game-forcing values';
                         }
-                    } else {
-                        // For minor/NT contexts, steer to 3NT as a practical game choice
-                        recommendedBid = new window.Bid('3NT');
-                        explanation = 'Game try with game-forcing values';
                     }
                 }
-            }
-        } catch (_) { /* best-effort safeguard */ }
+            } catch (_) { /* best-effort safeguard */ }
 
-        // --- Integration of the new Bidding Model ---
-        // Only call the model when the rules truly have no answer (null/undefined), or when a rules PASS looks suspect (strong hand in a live auction).
-        const isOpeningContext = (function () {
+            // Overcall planning when rules suggest PASS: prefer 1NT, natural suit, or takeout double per HCP/shape
             try {
-                if (system && typeof system._isOpeningBid === 'function') return !!system._isOpeningBid();
-                return !currentAuction.some(b => b && b.token && b.token !== 'PASS');
-            } catch (_) { return false; }
-        })();
+                if (!forcedBid && !hasTestOverride && (!recommendedBid || recommendedBid.token === 'PASS')) {
+                    const openingEntry = (currentAuction || []).find(b => b && /^[1-7][CDHS]$/.test(b.token || ''));
+                    const openingToken = openingEntry?.token || null;
+                    const openingSuit = openingToken ? openingToken.replace(/^[1-7]/, '') : null;
+                    const openingLevel = openingToken ? (parseInt(openingToken[0], 10) || 0) : null;
+                    const openingSeat = openingEntry?.seat || null;
+                    const ourSide = (currentTurn === 'N' || currentTurn === 'S') ? ['N', 'S'] : ['E', 'W'];
+                    const oppOpened = openingSeat && !ourSide.includes(openingSeat);
 
-        const rulesReturnedNull = !recommendedBid || recommendedBid.token == null;
-        // Only treat a PASS as suspicious when we have NOT previously bid (first action).
-        // Allow model consult when partner has acted (so advancer/responder can override a silent PASS),
-        // but avoid having the model invent speculative direct overcalls when our side has not yet entered the auction.
-        let ourSideHasBid = false;
-        let ourSideHasContract = false;
-        let weHaveActed = false;
-        try {
-            const ctx = (system && typeof system._seatContext === 'function') ? system._seatContext() : null;
-            if (ctx?.lastOur && ctx.lastOur.token) ourSideHasBid = true;
-            if (ctx?.weHaveBid) weHaveActed = true;
-            if (ctx?.ourSide && Array.isArray(currentAuction)) {
-                ourSideHasContract = currentAuction.some(b => {
-                    const tok = b?.token || '';
-                    return /^[1-7]/.test(tok) && ctx.ourSide.includes(b.seat);
-                });
-            }
-        } catch (_) { ourSideHasBid = false; ourSideHasContract = false; weHaveActed = false; }
-        try {
-            // Fallback detection for whether we personally have already bid a contract
-            const lastSelf = auctionHistory.find(e => e.position === currentTurn && e?.bid && e.bid.token && e.bid.token !== 'PASS');
-            if (lastSelf) weHaveActed = true;
-        } catch (_) { /* ignore */ }
-        const rulesPassButStrong = (!rulesReturnedNull && !forcedBid && recommendedBid.token === 'PASS' && (hand.hcp || 0) >= 10 && currentAuction.length > 0 && !isOpeningContext && !weHaveActed && ourSideHasBid);
-        const allowModelFallback = !isOpeningContext;
+                    // Only act if our side has not entered the auction with a contract and only passes followed the opener
+                    const ourSideHasContract = (currentAuction || []).some(b => b && ourSide.includes(b.seat) && /^[1-7]/.test(b.token || ''));
+                    const nonPassAfterOpening = (() => {
+                        if (!openingEntry) return true;
+                        const idx = (currentAuction || []).indexOf(openingEntry);
+                        return (currentAuction || []).slice(idx + 1).some(b => b && b.token && b.token !== 'PASS');
+                    })();
 
-        if ((rulesReturnedNull || rulesPassButStrong) && !forcedBid && allowModelFallback) {
-            const why = rulesReturnedNull ? 'null from rules' : 'rules PASS with 10+ HCP';
-            auctionLog(`Rules fallback trigger for ${currentTurn}: ${why}. Consulting bidding model...`);
-            try {
-                const context = {
-                    dealer: dealer,
-                    vulnerability: vulnerability,
-                    currentTurn: currentTurn
-                };
-                const modelBidResult = await getModelBid(currentAuction.map(b => b.token || 'PASS'), hand, context);
-                const modelBidToken = (modelBidResult && typeof modelBidResult === 'object') ? modelBidResult.token : modelBidResult;
-                const modelConfidence = (modelBidResult && typeof modelBidResult === 'object') ? modelBidResult.confidence : null;
+                    if (oppOpened && openingLevel === 1 && !ourSideHasContract && !nonPassAfterOpening) {
+                        const hcp = hand?.hcp || 0;
+                        const lengths = hand?.lengths || {};
+                        const lens = ['S', 'H', 'D', 'C'].map(s => lengths[s] || 0);
+                        const is4333 = lens.filter(v => v === 4).length === 1 && lens.filter(v => v === 3).length === 3;
+                        const is4432 = lens.filter(v => v === 4).length === 2 && lens.filter(v => v === 3).length === 1 && lens.filter(v => v === 2).length === 1;
+                        const is5332 = lens.filter(v => v === 5).length === 1 && lens.filter(v => v === 3).length === 2 && lens.filter(v => v === 2).length === 1;
+                        const balanced = is4333 || is4432 || is5332;
 
-                if (modelConfidence !== null && modelConfidence !== undefined) {
-                    auctionLog(`Model fallback confidence for ${currentTurn}: ${(modelConfidence * 100).toFixed(1)}% (${modelBidToken || 'PASS'})`);
-                }
+                        const hasStopper = (suit) => {
+                            if (!suit) return true;
+                            const cards = (hand?.suitBuckets?.[suit] || []).map(c => c.rank);
+                            const len = lengths[suit] || 0;
+                            if (cards.includes('A')) return true;
+                            if (cards.includes('K') && len >= 2) return true;
+                            const hasQueen = cards.includes('Q');
+                            const supportHonor = cards.includes('J') || cards.includes('T');
+                            if (hasQueen && supportHonor && len >= 3) return true;
+                            return false;
+                        };
 
-                const passesThreshold = modelBidToken && modelBidToken !== 'PASS' && (modelConfidence === null || modelConfidence >= MODEL_CONFIDENCE_THRESHOLD);
-                if (passesThreshold) {
-                    recommendedBid = new window.Bid(modelBidToken);
-                    auctionLog(`Model fallback applied for ${currentTurn}: ${modelBidToken}`);
-                } else if (modelConfidence !== null && modelConfidence < MODEL_CONFIDENCE_THRESHOLD) {
-                    auctionLog(`Model bid discarded due to low confidence (<${(MODEL_CONFIDENCE_THRESHOLD * 100).toFixed(0)}%). Keeping rules recommendation ${recommendedBid?.token || 'PASS'}.`);
-                }
-            } catch (e) {
-                console.error("Bidding model fallback failed:", e);
-            }
-        }
+                        // Highest-ranked 5+ card suit excluding opener's suit
+                        const suitOrder = ['S', 'H', 'D', 'C'];
+                        const bestFivePlus = suitOrder.find(s => s !== openingSuit && (lengths[s] || 0) >= 5) || null;
 
-        // Avoid unsafe NT contracts suggested by the model when we lack a stopper in opponents' last bid suit.
-        try {
-            if (!forcedBid && !hasTestOverride && recommendedBid && recommendedBid.token && recommendedBid.token.endsWith('NT')) {
-                const lastOppSuitBid = (() => {
-                    const isOpp = (pos) => {
-                        if (!pos) return false;
-                        const ns = currentTurn === 'N' || currentTurn === 'S';
-                        return ns ? (pos === 'E' || pos === 'W') : (pos === 'N' || pos === 'S');
-                    };
-                    const last = auctionHistory.slice().reverse().find(e => {
-                        const tok = e?.bid?.token || '';
-                        return /^[1-7][CDHS]$/.test(tok) && isOpp(e.position);
-                    });
-                    return last ? last.bid.token.replace(/^[1-7]/, '') : null;
-                })();
-
-                const hasStopper = (suit) => {
-                    if (!suit) return true;
-                    const len = (hand.lengths && hand.lengths[suit]) || 0;
-                    const cards = (hand.suitBuckets?.[suit] || []).map(c => c.rank);
-                    if (cards.includes('A')) return true; // any ace is a stopper
-                    if (cards.includes('K') && len >= 2) return true; // guarded king
-                    const hasQueen = cards.includes('Q');
-                    const supportHonor = cards.includes('J') || cards.includes('T');
-                    if (hasQueen && supportHonor && len >= 3) return true; // QJx/QTx+ length counts as partial control
-                    return false; // e.g., bare/queen doubleton is not a stopper
-                };
-
-                if (lastOppSuitBid && !hasStopper(lastOppSuitBid)) {
-                    // Try to steer to our longest suit (non-opponent suit) if legal, else pass.
-                    const order = ['S', 'H', 'D', 'C'];
-                    const best = order
-                        .filter(s => s !== lastOppSuitBid)
-                        .map(s => ({ s, len: (hand.lengths && hand.lengths[s]) || 0 }))
-                        .filter(o => o.len >= 5)
-                        .sort((a, b) => b.len - a.len || order.indexOf(a.s) - order.indexOf(b.s))[0];
-                    if (best) {
-                        const newTok = `${recommendedBid.token[0]}${best.s}`;
-                        recommendedBid = new window.Bid(newTok);
-                        explanation = 'Avoiding NT without stopper; choosing natural suit';
-                    } else {
-                        recommendedBid = new window.Bid('PASS');
-                        explanation = 'Pass - no stopper for opponents\' suit';
-                    }
-                }
-            }
-        } catch (_) { /* best-effort NT safety */ }
-
-        // Responder 2-over-1 preference: always show the longest 5+ suit (prefer majors) before a cheaper minor suggestion.
-        try {
-            if (!forcedBid && !hasTestOverride && recommendedBid && /^[12][CDHS]$/.test(recommendedBid.token)) {
-                const partnerSeat = partnerOf(currentTurn);
-                const weHaveBidContract = auctionHistory.some(e => e.position === currentTurn && /^[1-7]/.test(e?.bid?.token || ''));
-                const partnerLastContract = auctionHistory.slice().reverse().find(e => e.position === partnerSeat && /^[1-7][CDHS]$/.test(e?.bid?.token || ''));
-                const openerTok = partnerLastContract?.bid?.token || '';
-                const openerLevel = parseInt(openerTok[0], 10) || 0;
-                const openerSuit = openerTok.replace(/^[1-7]/, '') || null;
-                const lengths = hand.lengths || {};
-                const rank = { C: 0, D: 1, H: 2, S: 3 };
-                const suitOrder = ['S', 'H', 'D', 'C'];
-
-                if (!weHaveBidContract && openerLevel === 1 && openerSuit) {
-                    const candidates = suitOrder
-                        .filter(s => s !== openerSuit && (lengths[s] || 0) >= 5)
-                        .map(s => ({ s, len: lengths[s] || 0 }))
-                        .sort((a, b) => (b.len - a.len) || (rank[b.s] - rank[a.s])); // prefer longer, then higher-ranked (S > H > D > C)
-
-                    const best = candidates[0];
-                    if (best) {
-                        const needsTwoLevel = (rank[best.s] <= rank[openerSuit]);
-                        const level = needsTwoLevel ? 2 : 1;
-                        const newToken = `${level}${best.s}`;
-                        if (newToken !== recommendedBid.token) {
-                            const suitNames = { C: 'clubs', D: 'diamonds', H: 'hearts', S: 'spades' };
-                            recommendedBid = new window.Bid(newToken);
-                            recommendedBid.seat = currentTurn;
-                            explanation = `Natural ${newToken} response: 5+ ${suitNames[best.s] || best.s}, show longest suit first`;
-                        }
-                    }
-                }
-            }
-        } catch (_) { /* best-effort responder suit preference */ }
-
-        // Guard against model suggesting a short natural overcall; re-route to our longest valid suit.
-        try {
-            const tok = recommendedBid?.token || '';
-            // Only intervene for new-suit natural overcalls when our side is silent so far.
-            if (!forcedBid && !hasTestOverride && !ourSideHasBid && /^[1-7][CDHS]$/.test(tok)) {
-                const opponentsHaveContract = (() => {
-                    const sameSide = (pos) => {
-                        if (!pos) return false;
-                        const ns = currentTurn === 'N' || currentTurn === 'S';
-                        return ns ? (pos === 'N' || pos === 'S') : (pos === 'E' || pos === 'W');
-                    };
-                    return auctionHistory.some(e => {
-                        const tok = e?.bid?.token || '';
-                        return /^[1-7][CDHS]$/.test(tok) && e?.position && !sameSide(e.position);
-                    });
-                })();
-                if (!opponentsHaveContract) {
-                    throw new Error('skip_overcall_length_guard_no_opp_contract');
-                }
-                const level = parseInt(tok[0], 10) || 0;
-                const suit = tok[1];
-                const lengths = hand.lengths || {};
-                const suitLen = lengths[suit] || 0;
-                const minLen = level >= 2 ? 5 : 4;
-
-                const suitOrder = ['S', 'H', 'D', 'C'];
-                const findBestSuit = (minRequired) => {
-                    return suitOrder
-                        .map((s) => ({ s, len: lengths[s] || 0 }))
-                        .filter(({ len }) => len >= minRequired)
-                        .sort((a, b) => (b.len - a.len) || (suitOrder.indexOf(a.s) - suitOrder.indexOf(b.s)))[0];
-                };
-
-                if (suitLen < minLen) {
-                    const replacement = findBestSuit(minLen) || findBestSuit(4);
-                    if (replacement && replacement.s && replacement.s !== suit) {
-                        const newToken = `${level}${replacement.s}`;
-                        recommendedBid = new window.Bid(newToken);
-                        recommendedBid.seat = currentTurn;
-                        explanation = `Adjusted to natural ${newToken} (length ${replacement.len}) after filtering model`;
-                    } else {
-                        // No legal-length suit available – decline the speculative overcall
-                        recommendedBid = new window.Bid('PASS');
-                        recommendedBid.seat = currentTurn;
-                        explanation = 'Pass - insufficient length/strength for overcall';
-                    }
-                }
-            }
-        } catch (_) { /* best-effort natural-suit length guard */ }
-
-        // Prefer NT overcall with balanced strength and stopper instead of a low-level suit when appropriate.
-        try {
-            const tok = recommendedBid?.token || '';
-            if (!forcedBid && !hasTestOverride && /^[12][CDHS]$/.test(tok) && !ourSideHasContract) {
-                const lastOppContract = auctionHistory.slice().reverse().find(e => {
-                    const t = e?.bid?.token || '';
-                    const isContract = /^[1-7][CDHS]$/.test(t);
-                    if (!isContract) return false;
-                    const oppSide = (currentTurn === 'N' || currentTurn === 'S') ? ['E', 'W'] : ['N', 'S'];
-                    return oppSide.includes(e.position);
-                });
-                if (lastOppContract) {
-                    const oppTok = lastOppContract.bid.token || '';
-                    const oppSuit = oppTok.replace(/^[1-7]/, '') || null;
-                    const oppLevel = parseInt(oppTok[0], 10) || 0;
-                    const hcp = hand.hcp || 0;
-                    const lengths = hand.lengths || {};
-                    const lens = ['S', 'H', 'D', 'C'].map(s => lengths[s] || 0);
-                    const is4333 = lens.filter(v => v === 4).length === 1 && lens.filter(v => v === 3).length === 3;
-                    const is4432 = lens.filter(v => v === 4).length === 2 && lens.filter(v => v === 3).length === 1 && lens.filter(v => v === 2).length === 1;
-                    const is5332 = lens.filter(v => v === 5).length === 1 && lens.filter(v => v === 3).length === 2 && lens.filter(v => v === 2).length === 1;
-                    const balanced = is4333 || is4432 || is5332;
-                    const hasStopper = (suit) => {
-                        if (!suit) return true;
-                        const cards = (hand.suitBuckets?.[suit] || []).map(c => c.rank);
-                        const len = lengths[suit] || 0;
-                        if (cards.includes('A')) return true;
-                        if (cards.includes('K') && len >= 2) return true;
-                        const hasQueen = cards.includes('Q');
-                        const supportHonor = cards.includes('J') || cards.includes('T');
-                        if (hasQueen && supportHonor && len >= 3) return true;
-                        return false;
-                    };
-
-                    if (balanced && hasStopper(oppSuit)) {
-                        if (hcp >= 15 && hcp <= 18 && oppLevel === 1) {
+                        if (hcp >= 15 && hcp <= 18 && balanced && hasStopper(openingSuit)) {
                             recommendedBid = new window.Bid('1NT');
                             recommendedBid.seat = currentTurn;
                             explanation = '1NT overcall: 15-18 balanced with stopper';
-                        } else if (hcp >= 19 && hcp <= 20 && oppLevel <= 2) {
-                            recommendedBid = new window.Bid('2NT');
+                        } else if (hcp >= 15 && hcp <= 18 && !hasStopper(openingSuit) && !bestFivePlus) {
+                            recommendedBid = new window.Bid('X');
                             recommendedBid.seat = currentTurn;
-                            explanation = '2NT overcall: 19-20 balanced with stopper';
+                            explanation = 'Takeout double: 15-18 without stopper and no 5-card suit to bid';
+                        } else if (bestFivePlus && hcp >= 13) {
+                            const naturalTok = computeCheapestOvercallToken(bestFivePlus, openingToken);
+                            if (naturalTok) {
+                                recommendedBid = new window.Bid(naturalTok);
+                                recommendedBid.seat = currentTurn;
+                                explanation = `${naturalTok}: 13+ points and 5-card ${bestFivePlus === 'S' ? 'spade' : bestFivePlus === 'H' ? 'heart' : bestFivePlus === 'D' ? 'diamond' : 'club'} suit`;
+                            }
+                        } else if (((hcp >= 13 && hcp <= 14) || hcp >= 19) && !bestFivePlus) {
+                            recommendedBid = new window.Bid('X');
+                            recommendedBid.seat = currentTurn;
+                            explanation = 'Takeout double: suitable strength without a 5-card suit';
                         }
                     }
                 }
+            } catch (_) { /* best-effort overcall upgrade */ }
+
+            // --- Integration of the new Bidding Model ---
+            // Only call the model when the rules truly have no answer (null/undefined), or when a rules PASS looks suspect (strong hand in a live auction).
+            const isOpeningContext = (function () {
+                try {
+                    if (system && typeof system._isOpeningBid === 'function') return !!system._isOpeningBid();
+                    return !currentAuction.some(b => b && b.token && b.token !== 'PASS');
+                } catch (_) { return false; }
+            })();
+
+            // If opponents of a Strong 2C opener are up, do not let the model invent overcalls; keep rules/pass logic.
+            const strongTwoCOpenerEntry = (() => {
+                try { return currentAuction.find(b => b && /^[1-7]/.test(b.token || '')); } catch (_) { return null; }
+            })();
+            const strongTwoCOpenerSeat = (strongTwoCOpenerEntry && strongTwoCOpenerEntry.token === '2C') ? (strongTwoCOpenerEntry.seat || null) : null;
+            const facingStrongTwoCAsOpponent = !!(strongTwoCOpenerSeat && !sameSide(strongTwoCOpenerSeat, currentTurn));
+
+            const rulesReturnedNull = !recommendedBid || recommendedBid.token == null;
+            // Only treat a PASS as suspicious when we have NOT previously bid (first action).
+            // Allow model consult when partner has acted (so advancer/responder can override a silent PASS),
+            // but avoid having the model invent speculative direct overcalls when our side has not yet entered the auction.
+            let ourSideHasBid = false;
+            let ourSideHasContract = false;
+            let weHaveActed = false;
+            try {
+                const ctx = (system && typeof system._seatContext === 'function') ? system._seatContext() : null;
+                if (ctx?.lastOur && ctx.lastOur.token) ourSideHasBid = true;
+                if (ctx?.weHaveBid) weHaveActed = true;
+                if (ctx?.ourSide && Array.isArray(currentAuction)) {
+                    ourSideHasContract = currentAuction.some(b => {
+                        const tok = b?.token || '';
+                        return /^[1-7]/.test(tok) && ctx.ourSide.includes(b.seat);
+                    });
+                }
+            } catch (_) { ourSideHasBid = false; ourSideHasContract = false; weHaveActed = false; }
+            try {
+                // Fallback detection for whether we personally have already bid a contract
+                const lastSelf = auctionHistory.find(e => e.position === currentTurn && e?.bid && e.bid.token && e.bid.token !== 'PASS');
+                if (lastSelf) weHaveActed = true;
+            } catch (_) { /* ignore */ }
+            const rulesPassButStrong = (!rulesReturnedNull && !forcedBid && recommendedBid.token === 'PASS' && (hand.hcp || 0) >= 10 && currentAuction.length > 0 && !isOpeningContext && !weHaveActed && ourSideHasBid && !facingStrongTwoCAsOpponent);
+            const allowModelFallback = !isOpeningContext && !facingStrongTwoCAsOpponent;
+
+            if ((rulesReturnedNull || rulesPassButStrong) && !forcedBid && allowModelFallback) {
+                const why = rulesReturnedNull ? 'null from rules' : 'rules PASS with 10+ HCP';
+                auctionLog(`Rules fallback trigger for ${currentTurn}: ${why}. Consulting bidding model...`);
+                try {
+                    const context = {
+                        dealer: dealer,
+                        vulnerability: vulnerability,
+                        currentTurn: currentTurn
+                    };
+                    const modelBidResult = await getModelBid(currentAuction.map(b => b.token || 'PASS'), hand, context);
+                    const modelBidToken = (modelBidResult && typeof modelBidResult === 'object') ? modelBidResult.token : modelBidResult;
+                    const modelConfidence = (modelBidResult && typeof modelBidResult === 'object') ? modelBidResult.confidence : null;
+
+                    if (modelConfidence !== null && modelConfidence !== undefined) {
+                        auctionLog(`Model fallback confidence for ${currentTurn}: ${(modelConfidence * 100).toFixed(1)}% (${modelBidToken || 'PASS'})`);
+                    }
+
+                    // Prefer a long natural major over a model double when we have values and shape
+                    let modelOverrideApplied = false;
+                    try {
+                        const openingEntry = (auctionHistory || []).find(e => e && e.bid && /^[1-7](C|D|H|S)$/.test(e.bid.token || ''));
+                        const openingToken = openingEntry?.bid?.token || null;
+                        const openingSuit = openingToken ? openingToken.slice(1) : null;
+                        const hearts = hand?.lengths?.H || 0;
+                        const spades = hand?.lengths?.S || 0;
+                        const hcp = hand?.hcp || 0;
+                        const longMajor = (hearts >= 6 || spades >= 6) ? (hearts >= spades ? 'H' : 'S') : null;
+                        if (modelBidToken === 'X' && longMajor && openingSuit && hcp >= 8) {
+                            const naturalToken = computeCheapestOvercallToken(longMajor, openingToken);
+                            if (naturalToken) {
+                                recommendedBid = new window.Bid(naturalToken);
+                                explanation = `Natural ${longMajor === 'H' ? 'hearts' : 'spades'} overcall (6+ cards)`;
+                                auctionLog(`Replaced model double with ${naturalToken} due to long major (shape override).`);
+                                // Continue without applying the model double; keep this natural overcall
+                                modelOverrideApplied = true;
+                            }
+                        }
+                    } catch (_) { /* best-effort shape override */ }
+
+                    const bannedModelTokens = ['4NT', '5NT'];
+                    const isBannedModelBid = modelBidToken && bannedModelTokens.includes(modelBidToken);
+                    const passesThreshold = !modelOverrideApplied && modelBidToken && modelBidToken !== 'PASS' && !isBannedModelBid && (modelConfidence === null || modelConfidence >= MODEL_CONFIDENCE_THRESHOLD);
+                    if (isBannedModelBid) {
+                        auctionLog(`Model bid ${modelBidToken} discarded (system handles RKCB/quantitative bids; keep rules recommendation ${recommendedBid?.token || 'PASS'}).`);
+                    } else if (passesThreshold) {
+                        recommendedBid = new window.Bid(modelBidToken);
+                        auctionLog(`Model fallback applied for ${currentTurn}: ${modelBidToken}`);
+                    } else if (modelConfidence !== null && modelConfidence < MODEL_CONFIDENCE_THRESHOLD) {
+                        auctionLog(`Model bid discarded due to low confidence (<${(MODEL_CONFIDENCE_THRESHOLD * 100).toFixed(0)}%). Keeping rules recommendation ${recommendedBid?.token || 'PASS'}.`);
+                    }
+                } catch (e) {
+                    console.error("Bidding model fallback failed:", e);
+                }
             }
-        } catch (_) { /* best-effort NT overcall preference */ }
 
-        // Opener rebid in own suit after interference requires 6+ cards or extra values.
-        try {
-            const tok = recommendedBid?.token || '';
-            if (!forcedBid && /^[1-7][CDHS]$/.test(tok)) {
-                const suit = tok.replace(/^[1-7]/, '');
-                const level = parseInt(tok[0], 10) || 0;
-                const firstOurContract = auctionHistory.find(e => e.position === currentTurn && /^[1-7][CDHS]$/.test(e?.bid?.token || ''));
-                const lastOppContract = auctionHistory.slice().reverse().find(e => {
-                    const t = e?.bid?.token || '';
-                    if (!/^[1-7][CDHS]$/.test(t)) return false;
-                    return e.position && e.position !== currentTurn && e.position !== partnerOf(currentTurn);
-                });
+            // Avoid unsafe NT contracts suggested by the model when we lack a stopper in opponents' last bid suit.
+            try {
+                if (!forcedBid && !hasTestOverride && recommendedBid && recommendedBid.token && recommendedBid.token.endsWith('NT')) {
+                    const lastOppSuitBid = (() => {
+                        const isOpp = (pos) => {
+                            if (!pos) return false;
+                            const ns = currentTurn === 'N' || currentTurn === 'S';
+                            return ns ? (pos === 'E' || pos === 'W') : (pos === 'N' || pos === 'S');
+                        };
+                        const last = auctionHistory.slice().reverse().find(e => {
+                            const tok = e?.bid?.token || '';
+                            return /^[1-7][CDHS]$/.test(tok) && isOpp(e.position);
+                        });
+                        return last ? last.bid.token.replace(/^[1-7]/, '') : null;
+                    })();
 
-                if (firstOurContract && lastOppContract) {
-                    const firstSuit = firstOurContract.bid.token.replace(/^[1-7]/, '');
-                    const firstLevel = parseInt(firstOurContract.bid.token[0], 10) || 1;
-                    const len = (hand.lengths && hand.lengths[suit]) || 0;
-                    const hcp = hand.hcp || 0;
-                    const rebiddingSameSuit = suit === firstSuit && level >= firstLevel;
-                    if (rebiddingSameSuit && (len < 6 || hcp < 14)) {
-                        recommendedBid = new window.Bid('PASS');
-                        recommendedBid.seat = currentTurn;
-                        explanation = 'Pass - suit rebid needs 6+ cards or extra strength after interference';
+                    const hasStopper = (suit) => {
+                        if (!suit) return true;
+                        const len = (hand.lengths && hand.lengths[suit]) || 0;
+                        const cards = (hand.suitBuckets?.[suit] || []).map(c => c.rank);
+                        if (cards.includes('A')) return true; // any ace is a stopper
+                        if (cards.includes('K') && len >= 2) return true; // guarded king
+                        const hasQueen = cards.includes('Q');
+                        const supportHonor = cards.includes('J') || cards.includes('T');
+                        if (hasQueen && supportHonor && len >= 3) return true; // QJx/QTx+ length counts as partial control
+                        return false; // e.g., bare/queen doubleton is not a stopper
+                    };
+
+                    if (lastOppSuitBid && !hasStopper(lastOppSuitBid)) {
+                        // Try to steer to our longest suit (non-opponent suit) if legal, else pass.
+                        const order = ['S', 'H', 'D', 'C'];
+                        const best = order
+                            .filter(s => s !== lastOppSuitBid)
+                            .map(s => ({ s, len: (hand.lengths && hand.lengths[s]) || 0 }))
+                            .filter(o => o.len >= 5)
+                            .sort((a, b) => b.len - a.len || order.indexOf(a.s) - order.indexOf(b.s))[0];
+                        if (best) {
+                            const newTok = `${recommendedBid.token[0]}${best.s}`;
+                            recommendedBid = new window.Bid(newTok);
+                            explanation = 'Avoiding NT without stopper; choosing natural suit';
+                        } else {
+                            recommendedBid = new window.Bid('PASS');
+                            explanation = 'Pass - no stopper for opponents\' suit';
+                        }
                     }
                 }
-            }
-        } catch (_) { /* best-effort opener rebid sanity */ }
+            } catch (_) { /* best-effort NT safety */ }
 
-        // Guard against speculative NT inventions from the model when our side has not entered the auction with a contract.
-        try {
-            const tok = recommendedBid?.token || '';
-            if (!forcedBid && tok.endsWith('NT') && !ourSideHasContract) {
-                const minHcpForNTEntry = 15; // avoid NT overcalls/inventions with sub-invitational strength
-                if ((hand.hcp || 0) < minHcpForNTEntry) {
-                    recommendedBid = new window.Bid('PASS');
-                    explanation = 'Pass';
+            // Guard: natural overcalls must have adequate length (prevent 2C/2D overcalls on 3-card suits)
+            try {
+                ({ recommendedBid, explanation } = applyOvercallLengthGuard({
+                    recommendedBid,
+                    explanation,
+                    forcedBid,
+                    currentTurn,
+                    auctionHistory,
+                    hand,
+                    isOpponentPosition
+                }));
+                if (recommendedBid && !(recommendedBid instanceof window.Bid)) {
+                    recommendedBid = new window.Bid(recommendedBid.token || 'PASS');
                 }
+            } catch (_) { /* soft length guard for overcalls */ }
+
+            // Guard: avoid low-HCP two-level new-suit actions after having previously passed
+            if (!hasTestOverride) {
+                try {
+                    ({ recommendedBid, explanation } = applyTwoLevelFreeBidGuard({
+                        recommendedBid,
+                        explanation,
+                        forcedBid,
+                        currentTurn,
+                        auctionHistory,
+                        hand
+                    }));
+                    if (recommendedBid && !(recommendedBid instanceof window.Bid)) {
+                        recommendedBid = new window.Bid(recommendedBid.token || 'PASS');
+                    }
+                } catch (_) { /* soft guard for marginal two-level new-suit tries */ }
             }
-        } catch (_) { /* best-effort NT sanity guard */ }
 
-        // Competitive self-raise sanity: avoid jump-raising our own suit in competition without length and invitational values
-        try {
-            const tok = recommendedBid?.token || '';
-            if (!forcedBid && /^[3-7][CDHS]$/.test(tok)) {
-                const suit = tok.replace(/^[1-7]/, '');
-                const ourLastContract = auctionHistory.slice().reverse().find(e => e.position === currentTurn && /^[1-7][CDHS]$/.test(e?.bid?.token || ''));
-                const ourSuit = ourLastContract?.bid?.token ? ourLastContract.bid.token.replace(/^[1-7]/, '') : null;
-                const isSelfRaise = ourSuit && suit === ourSuit && (parseInt(tok[0], 10) || 0) >= 3;
-                const oppHasBid = auctionHistory.some(e => {
-                    const t = e?.bid?.token || '';
-                    return /^[1-7][CDHS]$/.test(t) && e.position && e.position !== currentTurn && e.position !== partnerOf(currentTurn);
-                });
+            // Responder 2-over-1 preference: always show the longest 5+ suit (prefer majors) before a cheaper minor suggestion.
+            try {
+                if (!forcedBid && !hasTestOverride && recommendedBid && /^[12][CDHS]$/.test(recommendedBid.token)) {
+                    const partnerSeat = partnerOf(currentTurn);
+                    const weHaveBidContract = auctionHistory.some(e => e.position === currentTurn && /^[1-7]/.test(e?.bid?.token || ''));
+                    const partnerLastContract = auctionHistory.slice().reverse().find(e => e.position === partnerSeat && /^[1-7][CDHS]$/.test(e?.bid?.token || ''));
+                    const openerTok = partnerLastContract?.bid?.token || '';
+                    const openerLevel = parseInt(openerTok[0], 10) || 0;
+                    const openerSuit = openerTok.replace(/^[1-7]/, '') || null;
+                    const lengths = hand.lengths || {};
+                    const rank = { C: 0, D: 1, H: 2, S: 3 };
+                    const suitOrder = ['S', 'H', 'D', 'C'];
 
-                if (isSelfRaise && oppHasBid) {
-                    const len = (hand.lengths && hand.lengths[suit]) || 0;
-                    const minLen = 5; // require at least a 5-card suit for competitive self-raise
-                    const minHcp = 12; // need invitational values to compete at the three-level
-                    if (len < minLen || (hand.hcp || 0) < minHcp) {
-                        recommendedBid = new window.Bid('PASS');
-                        recommendedBid.seat = currentTurn;
-                        explanation = 'Pass - insufficient length/values for competitive jump raise';
+                    if (!weHaveBidContract && openerLevel === 1 && openerSuit) {
+                        const candidates = suitOrder
+                            .filter(s => s !== openerSuit && (lengths[s] || 0) >= 5)
+                            .map(s => ({ s, len: lengths[s] || 0 }))
+                            .sort((a, b) => (b.len - a.len) || (rank[b.s] - rank[a.s])); // prefer longer, then higher-ranked (S > H > D > C)
+
+                        const best = candidates[0];
+                        if (best) {
+                            const needsTwoLevel = (rank[best.s] <= rank[openerSuit]);
+                            const level = needsTwoLevel ? 2 : 1;
+                            const newToken = `${level}${best.s}`;
+                            if (newToken !== recommendedBid.token) {
+                                const suitNames = { C: 'clubs', D: 'diamonds', H: 'hearts', S: 'spades' };
+                                recommendedBid = new window.Bid(newToken);
+                                recommendedBid.seat = currentTurn;
+                                explanation = `Natural ${newToken} response: 5+ ${suitNames[best.s] || best.s}, show longest suit first`;
+                            }
+                        }
                     }
                 }
-            }
-        } catch (_) { /* best-effort competitive raise sanity */ }
+            } catch (_) { /* best-effort responder suit preference */ }
+
+            // Guard against model suggesting a short natural overcall; re-route to our longest valid suit.
+            try {
+                const tok = recommendedBid?.token || '';
+                // Only intervene for new-suit natural overcalls when our side is silent so far.
+                if (!forcedBid && !hasTestOverride && !ourSideHasBid && /^[1-7][CDHS]$/.test(tok)) {
+                    const opponentsHaveContract = (() => {
+                        const sameSide = (pos) => {
+                            if (!pos) return false;
+                            const ns = currentTurn === 'N' || currentTurn === 'S';
+                            return ns ? (pos === 'N' || pos === 'S') : (pos === 'E' || pos === 'W');
+                        };
+                        return auctionHistory.some(e => {
+                            const tok = e?.bid?.token || '';
+                            return /^[1-7][CDHS]$/.test(tok) && e?.position && !sameSide(e.position);
+                        });
+                    })();
+                    if (!opponentsHaveContract) {
+                        throw new Error('skip_overcall_length_guard_no_opp_contract');
+                    }
+                    const level = parseInt(tok[0], 10) || 0;
+                    const suit = tok[1];
+                    const lengths = hand.lengths || {};
+                    const suitLen = lengths[suit] || 0;
+                    const minLen = level >= 2 ? 5 : 4;
+
+                    const suitOrder = ['S', 'H', 'D', 'C'];
+                    const findBestSuit = (minRequired) => {
+                        return suitOrder
+                            .map((s) => ({ s, len: lengths[s] || 0 }))
+                            .filter(({ len }) => len >= minRequired)
+                            .sort((a, b) => (b.len - a.len) || (suitOrder.indexOf(a.s) - suitOrder.indexOf(b.s)))[0];
+                    };
+
+                    if (suitLen < minLen) {
+                        const replacement = findBestSuit(minLen) || findBestSuit(4);
+                        if (replacement && replacement.s && replacement.s !== suit) {
+                            const newToken = `${level}${replacement.s}`;
+                            recommendedBid = new window.Bid(newToken);
+                            recommendedBid.seat = currentTurn;
+                            explanation = `Adjusted to natural ${newToken} (length ${replacement.len}) after filtering model`;
+                        } else {
+                            // No legal-length suit available – decline the speculative overcall
+                            recommendedBid = new window.Bid('PASS');
+                            recommendedBid.seat = currentTurn;
+                            explanation = 'Pass - insufficient length/strength for overcall';
+                        }
+                    }
+                }
+            } catch (_) { /* best-effort natural-suit length guard */ }
+
+            // Direct-seat Michaels cue-bid over opener's suit when holding classic 5-5 shape and strength
+            try {
+                if (!forcedBid && !hasTestOverride && (!recommendedBid || recommendedBid.token === 'PASS') && !ourSideHasBid) {
+                    const openingEntry = (auctionHistory || []).find(e => e && e.bid && /^[1-7](C|D|H|S|NT)$/.test(e.bid.token));
+                    if (openingEntry && openingEntry.bid.token !== '1NT') {
+                        const openingSuit = openingEntry.bid.token.replace(/^[1-7]/, '');
+                        const oppSide = (currentTurn === 'N' || currentTurn === 'S') ? ['E', 'W'] : ['N', 'S'];
+                        const onOpponentsSide = oppSide.includes(openingEntry.position);
+                        // Direct seat: no non-pass actions after opener and before us
+                        let directSeat = false;
+                        if (onOpponentsSide) {
+                            let sawOpening = false;
+                            directSeat = true;
+                            for (const e of auctionHistory) {
+                                const tok = e?.bid?.token || 'PASS';
+                                if (!sawOpening) {
+                                    if (e === openingEntry) sawOpening = true;
+                                    continue;
+                                }
+                                if (tok !== 'PASS') { directSeat = false; break; }
+                                if (e.position === currentTurn) break; // safety
+                            }
+                        }
+
+                        const len = hand.lengths || {};
+                        const hcp = hand.hcp || 0;
+                        const hasMajors55 = len.H >= 5 && len.S >= 5;
+                        const hasSpadesPlusMinor55 = len.S >= 5 && (len.C >= 5 || len.D >= 5);
+                        const hasHeartsPlusMinor55 = len.H >= 5 && (len.C >= 5 || len.D >= 5);
+
+                        const michaelsShape = (
+                            (openingSuit === 'C' || openingSuit === 'D') ? hasMajors55 :
+                                (openingSuit === 'H') ? hasSpadesPlusMinor55 :
+                                    (openingSuit === 'S') ? hasHeartsPlusMinor55 : false
+                        );
+
+                        if (onOpponentsSide && directSeat && michaelsShape && hcp >= 10) {
+                            const cueTok = `2${openingSuit}`;
+                            recommendedBid = new window.Bid(cueTok);
+                            recommendedBid.seat = currentTurn;
+                            explanation = detectMichaelsCueBid(currentTurn, recommendedBid, auctionHistory, hand) || 'Michaels cue-bid (two-suited overcall)';
+                        }
+                    }
+                }
+            } catch (_) { /* soft Michaels generator */ }
+
+            // Prefer NT overcall with balanced strength and stopper instead of a low-level suit when appropriate.
+            try {
+                const tok = recommendedBid?.token || '';
+                if (!forcedBid && !hasTestOverride && /^[12][CDHS]$/.test(tok) && !ourSideHasContract) {
+                    const lastOppContract = auctionHistory.slice().reverse().find(e => {
+                        const t = e?.bid?.token || '';
+                        const isContract = /^[1-7][CDHS]$/.test(t);
+                        if (!isContract) return false;
+                        const oppSide = (currentTurn === 'N' || currentTurn === 'S') ? ['E', 'W'] : ['N', 'S'];
+                        return oppSide.includes(e.position);
+                    });
+                    if (lastOppContract) {
+                        const oppTok = lastOppContract.bid.token || '';
+                        const oppSuit = oppTok.replace(/^[1-7]/, '') || null;
+                        const oppLevel = parseInt(oppTok[0], 10) || 0;
+                        const hcp = hand.hcp || 0;
+                        const lengths = hand.lengths || {};
+                        const lens = ['S', 'H', 'D', 'C'].map(s => lengths[s] || 0);
+                        const is4333 = lens.filter(v => v === 4).length === 1 && lens.filter(v => v === 3).length === 3;
+                        const is4432 = lens.filter(v => v === 4).length === 2 && lens.filter(v => v === 3).length === 1 && lens.filter(v => v === 2).length === 1;
+                        const is5332 = lens.filter(v => v === 5).length === 1 && lens.filter(v => v === 3).length === 2 && lens.filter(v => v === 2).length === 1;
+                        const balanced = is4333 || is4432 || is5332;
+                        const hasStopper = (suit) => {
+                            if (!suit) return true;
+                            const cards = (hand.suitBuckets?.[suit] || []).map(c => c.rank);
+                            const len = lengths[suit] || 0;
+                            if (cards.includes('A')) return true;
+                            if (cards.includes('K') && len >= 2) return true;
+                            const hasQueen = cards.includes('Q');
+                            const supportHonor = cards.includes('J') || cards.includes('T');
+                            if (hasQueen && supportHonor && len >= 3) return true;
+                            return false;
+                        };
+
+                        if (balanced && hasStopper(oppSuit)) {
+                            if (hcp >= 15 && hcp <= 18 && oppLevel === 1) {
+                                recommendedBid = new window.Bid('1NT');
+                                recommendedBid.seat = currentTurn;
+                                explanation = '1NT overcall: 15-18 balanced with stopper';
+                            } else if (hcp >= 19 && hcp <= 20 && oppLevel <= 2) {
+                                recommendedBid = new window.Bid('2NT');
+                                recommendedBid.seat = currentTurn;
+                                explanation = '2NT overcall: 19-20 balanced with stopper';
+                            }
+                        }
+                    }
+                }
+            } catch (_) { /* best-effort NT overcall preference */ }
+
+            // Opener rebid in own suit after interference requires 6+ cards or extra values.
+            try {
+                const tok = recommendedBid?.token || '';
+                if (!forcedBid && /^[1-7][CDHS]$/.test(tok)) {
+                    const suit = tok.replace(/^[1-7]/, '');
+                    const level = parseInt(tok[0], 10) || 0;
+                    const firstOurContract = auctionHistory.find(e => e.position === currentTurn && /^[1-7][CDHS]$/.test(e?.bid?.token || ''));
+                    const lastOppContract = auctionHistory.slice().reverse().find(e => {
+                        const t = e?.bid?.token || '';
+                        if (!/^[1-7][CDHS]$/.test(t)) return false;
+                        return e.position && e.position !== currentTurn && e.position !== partnerOf(currentTurn);
+                    });
+
+                    if (firstOurContract && lastOppContract) {
+                        const firstSuit = firstOurContract.bid.token.replace(/^[1-7]/, '');
+                        const firstLevel = parseInt(firstOurContract.bid.token[0], 10) || 1;
+                        const len = (hand.lengths && hand.lengths[suit]) || 0;
+                        const hcp = hand.hcp || 0;
+                        const rebiddingSameSuit = suit === firstSuit && level >= firstLevel;
+                        if (rebiddingSameSuit && (len < 6 || hcp < 14)) {
+                            recommendedBid = new window.Bid('PASS');
+                            recommendedBid.seat = currentTurn;
+                            explanation = 'Pass - suit rebid needs 6+ cards or extra strength after interference';
+                        }
+                    }
+                }
+            } catch (_) { /* best-effort opener rebid sanity */ }
+
+            // Guard against speculative NT inventions from the model when our side has not entered the auction with a contract.
+            try {
+                const tok = recommendedBid?.token || '';
+                if (!forcedBid && tok.endsWith('NT') && !ourSideHasContract) {
+                    const minHcpForNTEntry = 15; // avoid NT overcalls/inventions with sub-invitational strength
+                    if ((hand.hcp || 0) < minHcpForNTEntry) {
+                        recommendedBid = new window.Bid('PASS');
+                        explanation = 'Pass';
+                    }
+                }
+            } catch (_) { /* best-effort NT sanity guard */ }
+
+            // Competitive self-raise sanity: avoid jump-raising our own suit in competition without length and invitational values
+            try {
+                const tok = recommendedBid?.token || '';
+                if (!forcedBid && /^[3-7][CDHS]$/.test(tok)) {
+                    const suit = tok.replace(/^[1-7]/, '');
+                    const ourLastContract = auctionHistory.slice().reverse().find(e => e.position === currentTurn && /^[1-7][CDHS]$/.test(e?.bid?.token || ''));
+                    const ourSuit = ourLastContract?.bid?.token ? ourLastContract.bid.token.replace(/^[1-7]/, '') : null;
+                    const isSelfRaise = ourSuit && suit === ourSuit && (parseInt(tok[0], 10) || 0) >= 3;
+                    const oppHasBid = auctionHistory.some(e => {
+                        const t = e?.bid?.token || '';
+                        return /^[1-7][CDHS]$/.test(t) && e.position && e.position !== currentTurn && e.position !== partnerOf(currentTurn);
+                    });
+
+                    if (isSelfRaise && oppHasBid) {
+                        const len = (hand.lengths && hand.lengths[suit]) || 0;
+                        const minLen = 5; // require at least a 5-card suit for competitive self-raise
+                        const minHcp = 12; // need invitational values to compete at the three-level
+                        if (len < minLen || (hand.hcp || 0) < minHcp) {
+                            recommendedBid = new window.Bid('PASS');
+                            recommendedBid.seat = currentTurn;
+                            explanation = 'Pass - insufficient length/values for competitive jump raise';
+                        }
+                    }
+                }
+            } catch (_) { /* best-effort competitive raise sanity */ }
+        } // end skipGuardMutations
 
         // Ensure the bid retains the acting seat after any model-driven replacement.
         if (recommendedBid && !recommendedBid.seat) {
@@ -1986,32 +2400,11 @@ async function makeSystemBid() {
                 })();
 
                 if (partnerCue) {
-                    // Find our side's last strain (non-cue contract) to steer to game in that strain; else default to 4NT
-                    const sameSide = (seat) => (seat === 'N' || seat === 'S') ? 'NS' : 'EW';
-                    const sideTag = sameSide(currentTurn);
-                    const lastOurContract = auctionHistory.slice().reverse().find(e => {
-                        const tok = e?.bid?.token || 'PASS';
-                        if (!/^[1-7]/.test(tok)) return false;
-                        if (isCueBidOfOpponentsSuit(e.position, e.bid, auctionHistory)) return false;
-                        return sameSide(e.position) === sideTag;
-                    });
-
-                    const strain = lastOurContract ? lastOurContract.bid.token.replace(/^[1-7]/, '') : null;
-                    const gameLevelFor = (s) => {
-                        if (s === 'C' || s === 'D') return 5;
-                        if (s === 'H' || s === 'S') return 4;
-                        if (s === 'NT') return 4;
-                        return 4;
-                    };
-
-                    let fallbackToken = '4NT';
-                    if (strain) {
-                        const level = gameLevelFor(strain);
-                        fallbackToken = `${level}${strain === 'NT' ? 'NT' : strain}`;
+                    const cuePlan = computeCueBidFollowUp(currentTurn, auctionHistory, hand);
+                    if (cuePlan) {
+                        recommendedBid = cuePlan.bid;
+                        explanation = cuePlan.explanation;
                     }
-
-                    recommendedBid = new window.Bid(fallbackToken);
-                    explanation = 'Forcing over partner cue-bid';
                 }
             }
         } catch (_) { /* best-effort cue-force safeguard */ }
@@ -2169,6 +2562,30 @@ async function makeSystemBid() {
             explanation = 'Pass';
         }
 
+        // If partner overcalled naturally and opponents cue-bid that suit, avoid speculative high-level raises with weak/support-less hands
+        try {
+            const partnerSeat = partnerOf(currentTurn);
+            const partnerLast = auctionHistory.slice().reverse().find(e => e.position === partnerSeat && /^[1-7][CDHS]$/.test(e?.bid?.token || ''));
+            const partnerSuit = partnerLast ? partnerLast.bid.token.replace(/^[1-7]/, '') : null;
+            if (partnerSuit) {
+                const partnerIdx = auctionHistory.lastIndexOf(partnerLast);
+                const oppCueAfterPartner = auctionHistory.slice(partnerIdx + 1).find(e => {
+                    const tok = e?.bid?.token || '';
+                    if (!/^[1-7][CDHS]$/.test(tok)) return false;
+                    const suit = tok.replace(/^[1-7]/, '');
+                    const opp = isOpponentPosition(e.position, currentTurn);
+                    return opp && suit === partnerSuit;
+                });
+                const weakHcp = (hand?.hcp || 0) <= 6;
+                const shortTrump = (hand?.lengths?.[partnerSuit] || 0) < 4;
+                const isHighRaiseOfPartnerSuit = recommendedBid && /^[4-7][CDHS]$/.test(recommendedBid.token) && recommendedBid.token.replace(/^[1-7]/, '') === partnerSuit;
+                if (oppCueAfterPartner && isHighRaiseOfPartnerSuit && (weakHcp || shortTrump)) {
+                    recommendedBid = new window.Bid('PASS');
+                    explanation = 'Pass';
+                }
+            }
+        } catch (_) { /* conservative guard only */ }
+
         // Competitive cue-bid explanation: if bidding opponents' previously-bid suit
         if (!forcedBid && recommendedBid.token && recommendedBid.token !== 'PASS' && recommendedBid.token !== 'X' && recommendedBid.token !== 'XX') {
             try {
@@ -2231,63 +2648,24 @@ async function makeSystemBid() {
 
         // Guard: ensure responder shows a major instead of passing when partner opened a lower-ranking suit
         try {
-            if (!forcedBid && recommendedBid && recommendedBid.token === 'PASS' && currentTurn && currentAuction.length >= 2) {
-                const partnerSeat = partnerOf(currentTurn);
-                const partnerLast = auctionHistory.slice().reverse().find(e => e.position === partnerSeat && /^[1-7][CDHS]$/.test(e?.bid?.token || ''));
-                if (partnerLast) {
-                    const partnerTok = partnerLast.bid.token;
-                    const partnerSuit = partnerTok.slice(-1);
-                    const handSpades = hand?.lengths?.S || 0;
-                    const handHearts = hand?.lengths?.H || 0;
-                    const hcp = typeof hand?.hcp === 'number' ? hand.hcp : 0;
-                    const ourSideSeats = (currentTurn === 'N' || currentTurn === 'S') ? ['N', 'S'] : ['E', 'W'];
-                    const oppSeats = ourSideSeats.includes('N') ? ['E', 'W'] : ['N', 'S'];
-                    const opponentIntervened = auctionHistory.some(e => oppSeats.includes(e.position) && /^[1-7](C|D|H|S|NT)$/.test(e?.bid?.token || ''));
-                    const requiredLen = opponentIntervened ? 5 : 4; // 5+ if opponents bid a suit, else 4-card suit allowed over partner's opening
-                    const totalPoints = computeTotalPoints(hand);
-                    const haveFiveSpades = handSpades >= 5;
-                    const haveFourSpades = handSpades >= 4;
-                    const partnerOpenedMinor = partnerSuit === 'C' || partnerSuit === 'D';
-                    const partnerOpenedHeart = partnerSuit === 'H';
-                    const minPointsForLevel = (lvl) => (lvl >= 2 ? 10 : 6);
-                    const canBidSpades = (
-                        partnerSuit !== 'S' &&
-                        handSpades >= requiredLen &&
-                        totalPoints >= minPointsForLevel(1) &&
-                        (
-                            partnerOpenedMinor ||
-                            partnerOpenedHeart
-                        )
-                    );
-                    const canBidHearts = (!partnerOpenedHeart && partnerSuit !== 'H' && handHearts >= requiredLen && totalPoints >= minPointsForLevel(1) && partnerOpenedMinor);
-                    if (canBidSpades) {
-                        recommendedBid = new window.Bid('1S');
-                        explanation = partnerOpenedHeart
-                            ? `1S response: ${requiredLen}+ spades and 6+ HCP over partner's 1H (show major instead of passing${opponentIntervened ? ' after interference' : ''})`
-                            : `1S response: ${requiredLen}+ spades and 6+ HCP (show major instead of passing${opponentIntervened ? ' after interference' : ''})`;
-                    } else if (canBidHearts && partnerOpenedMinor) {
-                        recommendedBid = new window.Bid('1H');
-                        explanation = `1H response: ${requiredLen}+ hearts and 6+ HCP (show major instead of passing${opponentIntervened ? ' after interference' : ''})`;
-                    } else if (partnerOpenedMinor && !opponentIntervened && handSpades < 4 && handHearts < 4) {
-                        // No 4-card major over partner's minor: use NT ranges
-                        if (hcp >= 5 && hcp <= 10) {
-                            recommendedBid = new window.Bid('1NT');
-                            explanation = '1NT response: 5-10 HCP, no 4-card major over partner’s minor';
-                        } else if (hcp >= 11 && hcp <= 12) {
-                            recommendedBid = new window.Bid('2NT');
-                            explanation = '2NT response: 11-12 HCP, no 4-card major over partner’s minor';
-                        } else if (hcp >= 13 && hcp <= 14) {
-                            recommendedBid = new window.Bid('3NT');
-                            explanation = '3NT response: 13-14 HCP, no 4-card major over partner’s minor';
-                        }
-                    }
-                }
+            ({ recommendedBid, explanation } = applyResponderMajorGuard({
+                recommendedBid,
+                explanation,
+                forcedBid,
+                currentTurn,
+                auctionHistory,
+                hand,
+                isValidSystemBid,
+                computeTotalPoints
+            }));
+            if (recommendedBid && !(recommendedBid instanceof window.Bid)) {
+                recommendedBid = new window.Bid(recommendedBid.token || 'PASS');
             }
         } catch (_) { /* soft safeguard */ }
 
         // Guard: avoid raising partner without support or values
         try {
-            if (!forcedBid && recommendedBid && recommendedBid.token && /^[1-7][CDHS]$/.test(recommendedBid.token)) {
+            if (!forcedBid && !hasTestOverride && recommendedBid && recommendedBid.token && /^[1-7][CDHS]$/.test(recommendedBid.token)) {
                 const partnerSeat = partnerOf(currentTurn);
                 const partnerLastContract = auctionHistory.slice().reverse().find(e => e.position === partnerSeat && /^[1-7][CDHS]$/.test(e?.bid?.token || ''));
                 if (partnerLastContract) {
@@ -2319,22 +2697,28 @@ async function makeSystemBid() {
             if (!forcedBid && recommendedBid && recommendedBid.token === 'PASS') {
                 const partnerSeat = partnerOf(currentTurn);
                 const lastPartnerAction = auctionHistory.slice().reverse().find(e => e.position === partnerSeat && e?.bid && e.bid.token && e.bid.token !== 'PASS');
-                const partnerCue = lastPartnerAction && isCueBidOfOpponentsSuit(lastPartnerAction.position, lastPartnerAction.bid, auctionHistory);
+                const partnerCue = (() => {
+                    if (!lastPartnerAction) return false;
+                    // Prefer explicit cue detection; fall back to suit check so we never miss the force
+                    if (isCueBidOfOpponentsSuit(lastPartnerAction.position, lastPartnerAction.bid, auctionHistory)) return true;
+                    const tok = lastPartnerAction?.bid?.token || '';
+                    const suit = tok.replace(/^[1-7]/, '');
+                    if (!tok || tok === 'PASS' || tok === 'X' || tok === 'XX' || suit === 'NT') return false;
+                    const oppSeats = (partnerSeat === 'N' || partnerSeat === 'S') ? ['E', 'W'] : ['N', 'S'];
+                    return auctionHistory.some(entry => {
+                        const t = entry?.bid?.token || 'PASS';
+                        if (!/^[1-7]/.test(t)) return false;
+                        const entrySuit = t.replace(/^[1-7]/, '');
+                        return oppSeats.includes(entry?.position) && entrySuit === suit;
+                    });
+                })();
+
                 if (partnerCue) {
-                    const strain = (() => {
-                        const lastOurContract = auctionHistory.slice().reverse().find(e => e.position === partnerSeat && /^[1-7]/.test(e?.bid?.token || '') && !isCueBidOfOpponentsSuit(e.position, e.bid, auctionHistory));
-                        if (!lastOurContract) return null;
-                        return lastOurContract.bid.token.replace(/^[1-7]/, '');
-                    })();
-                    const gameLevelFor = (s) => {
-                        if (s === 'C' || s === 'D') return 5;
-                        if (s === 'H' || s === 'S') return 4;
-                        if (s === 'NT') return 4;
-                        return 4;
-                    };
-                    const target = strain ? `${gameLevelFor(strain)}${strain === 'NT' ? 'NT' : strain}` : '4NT';
-                    recommendedBid = new window.Bid(target);
-                    explanation = 'Forcing over partner cue-bid';
+                    const cuePlan = computeCueBidFollowUp(currentTurn, auctionHistory, hand);
+                    if (cuePlan) {
+                        recommendedBid = cuePlan.bid;
+                        explanation = cuePlan.explanation;
+                    }
                 }
             }
         } catch (_) { /* best-effort cue force */ }
@@ -2382,15 +2766,11 @@ async function makeSystemBid() {
                     });
                 })();
                 if (partnerCue) {
-                    const fallback = (() => {
-                        const lastOurContract = auctionHistory.slice().reverse().find(e => e.position === partnerSeat && /^[1-7](C|D|H|S|NT)$/.test(e?.bid?.token || '') && !isCueBidOfOpponentsSuit(e.position, e.bid, auctionHistory));
-                        if (!lastOurContract) return '4NT';
-                        const strain = lastOurContract.bid.token.replace(/^[1-7]/, '');
-                        const level = (strain === 'C' || strain === 'D') ? 5 : 4;
-                        return `${level}${strain}`;
-                    })();
-                    recommendedBid = new window.Bid(fallback);
-                    explanation = 'Forcing over partner cue-bid';
+                    const cuePlan = computeCueBidFollowUp(currentTurn, auctionHistory, hand);
+                    if (cuePlan) {
+                        recommendedBid = cuePlan.bid;
+                        explanation = cuePlan.explanation;
+                    }
                 }
             }
         } catch (_) { /* non-fatal */ }
@@ -2410,6 +2790,112 @@ async function makeSystemBid() {
                 }
             }
         } catch (_) { /* best-effort sync */ }
+
+        // Final fail-safe: if partner previously cue-bid opponents' suit, do not allow a PASS
+        try {
+            if (!forcedBid && recommendedBid && recommendedBid.token === 'PASS') {
+                auctionLog('Cue-force guard check', {
+                    seat: currentTurn,
+                    rec: recommendedBid?.token,
+                    hist: auctionHistory.length,
+                    live: currentAuction.length
+                });
+                const partnerSeat = partnerOf(currentTurn);
+                const opponentSeats = (partnerSeat === 'N' || partnerSeat === 'S') ? ['E', 'W'] : ['N', 'S'];
+                let partnerCueEntry = (() => {
+                    for (let i = auctionHistory.length - 1; i >= 0; i--) {
+                        const entry = auctionHistory[i];
+                        if (!entry || entry.position !== partnerSeat) continue;
+                        const tok = entry?.bid?.token || '';
+                        if (!/^[1-7][CDHS]$/.test(tok)) continue;
+                        const suit = tok.replace(/^[1-7]/, '');
+                        const oppMatched = auctionHistory.some((opp, idx) => {
+                            if (idx >= i) return false; // only earlier opponent bids
+                            const t = opp?.bid?.token || 'PASS';
+                            if (!/^[1-7]/.test(t)) return false;
+                            const s = t.replace(/^[1-7]/, '');
+                            return opponentSeats.includes(opp?.position) && s === suit;
+                        });
+                        if (oppMatched) return { entry, suit };
+                    }
+                    return null;
+                })();
+
+                auctionLog('Cue-force partnerCueEntry found?', !!partnerCueEntry, 'partnerSeat=', partnerSeat);
+                if (recommendedBid.token === 'PASS') {
+                    auctionLog('Cue-force history snapshot', auctionHistory.map(e => `${e?.position || '?'}:${e?.bid?.token || ''}`));
+                }
+
+                // Fallback to the live auction when history is sparse (e.g., jsdom stubs)
+                if (!partnerCueEntry && Array.isArray(currentAuction) && currentAuction.length) {
+                    const findLastIndex = (arr, pred) => { for (let i = arr.length - 1; i >= 0; i--) { if (pred(arr[i], i)) return i; } return -1; };
+                    const idx = findLastIndex(currentAuction, (b) => b && b.seat === partnerSeat && b.token && b.token !== 'PASS');
+                    if (idx >= 0) {
+                        const bid = currentAuction[idx];
+                        const tok = bid?.token || '';
+                        const suit = tok.replace(/^[1-7]/, '');
+                        if (suit && suit !== 'NT' && tok !== 'X' && tok !== 'XX') {
+                            const oppMatch = currentAuction.slice(0, idx).some((opp) => {
+                                const t = opp?.token || 'PASS';
+                                if (!/^[1-7]/.test(t)) return false;
+                                return opponentSeats.includes(opp?.seat) && t.replace(/^[1-7]/, '') === suit;
+                            });
+                            if (oppMatch) {
+                                partnerCueEntry = { entry: { bid, position: partnerSeat }, suit };
+                            }
+                        }
+                    }
+                }
+
+                if (partnerCueEntry) {
+                    const cuePlan = computeCueBidFollowUp(currentTurn, auctionHistory, hand);
+                    if (cuePlan) {
+                        recommendedBid = cuePlan.bid;
+                        explanation = cuePlan.explanation;
+                    }
+                } else if (Array.isArray(currentAuction) && currentAuction.length) {
+                    // Ultra-conservative fallback using only live auction: if partner's last bid
+                    // matches an earlier opponent suit, treat it as a cue and continue one round.
+                    const ourSide = (currentTurn === 'N' || currentTurn === 'S') ? ['N', 'S'] : ['E', 'W'];
+                    const partnerIdx = (() => {
+                        for (let i = currentAuction.length - 1; i >= 0; i--) {
+                            const b = currentAuction[i];
+                            if (b && b.seat === partnerSeat && b.token && b.token !== 'PASS') return i;
+                        }
+                        return -1;
+                    })();
+                    if (partnerIdx >= 0) {
+                        const partnerBid = currentAuction[partnerIdx];
+                        const suit = partnerBid.token.replace(/^[1-7]/, '');
+                        if (suit && suit !== 'NT' && partnerBid.token !== 'X' && partnerBid.token !== 'XX') {
+                            const oppSuitBefore = currentAuction.slice(0, partnerIdx).some((opp) => {
+                                const t = opp?.token || 'PASS';
+                                if (!/^[1-7]/.test(t)) return false;
+                                return opponentSeats.includes(opp?.seat) && t.replace(/^[1-7]/, '') === suit;
+                            });
+                            if (oppSuitBefore) {
+                                const cuePlan = computeCueBidFollowUp(currentTurn, auctionHistory, hand);
+                                if (cuePlan) {
+                                    recommendedBid = cuePlan.bid;
+                                    explanation = cuePlan.explanation;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Absolute fallback: if partner's latest contract (from history or live auction)
+                // matches any opponent suit seen so far, force us to game even when seats or
+                // cues were not recognized above (jsdom stubs can drop seat metadata).
+                if (!partnerCueEntry && recommendedBid && recommendedBid.token === 'PASS') {
+                    const cuePlan = computeCueBidFollowUp(currentTurn, auctionHistory, hand);
+                    if (cuePlan) {
+                        recommendedBid = cuePlan.bid;
+                        explanation = cuePlan.explanation;
+                    }
+                }
+            }
+        } catch (_) { /* last-ditch cue force */ }
 
         auctionHistory.push({
             position: currentTurn,
@@ -2466,6 +2952,144 @@ async function makeSystemBid() {
         advanceTurn();
         updateAuctionTable();
         processTurn();
+    }
+}
+
+// Shared helper: pick a one-round-force continuation after partner cue-bids opponents' suit
+function computeCueBidFollowUp(currentTurn, auctionHistory, hand) {
+    try {
+        if (!currentTurn || !Array.isArray(auctionHistory)) return null;
+        const partnerSeat = partnerOf(currentTurn);
+        const lastPartnerAction = auctionHistory.slice().reverse().find(e => e && e.position === partnerSeat && e.bid && e.bid.token && e.bid.token !== 'PASS');
+        if (!lastPartnerAction) return null;
+
+        const partnerCue = (() => {
+            if (isCueBidOfOpponentsSuit(lastPartnerAction.position, lastPartnerAction.bid, auctionHistory)) return true;
+            const tok = lastPartnerAction?.bid?.token || '';
+            const suit = tok.replace(/^[1-7]/, '');
+            if (!tok || tok === 'PASS' || tok === 'X' || tok === 'XX' || suit === 'NT') return false;
+            const oppSeats = (partnerSeat === 'N' || partnerSeat === 'S') ? ['E', 'W'] : ['N', 'S'];
+            return auctionHistory.some(entry => {
+                const t = entry?.bid?.token || 'PASS';
+                if (!/^[1-7]/.test(t)) return false;
+                const entrySuit = t.replace(/^[1-7]/, '');
+                return oppSeats.includes(entry?.position) && entrySuit === suit;
+            });
+        })();
+        if (!partnerCue) return null;
+
+        const suitOrder = ['C', 'D', 'H', 'S', 'NT'];
+        const isLegalBid = (token) => {
+            if (!token) return false;
+            try {
+                if (typeof system?.isLegal === 'function') {
+                    return system.isLegal(new window.Bid(token));
+                }
+            } catch (_) { /* fall back to sufficiency check */ }
+
+            const lastContract = auctionHistory.slice().reverse().find(e => {
+                const t = e?.bid?.token || '';
+                return /^[1-7](C|D|H|S|NT)$/.test(t);
+            });
+            if (!lastContract) return true;
+            const lastTok = lastContract.bid.token;
+            const lastLevel = parseInt(lastTok[0], 10) || 0;
+            const lastSuit = lastTok.replace(/^[1-7]/, '');
+            const level = parseInt(token[0], 10) || 0;
+            const suit = token.replace(/^[1-7]/, '');
+            const higherLevel = level > lastLevel;
+            const higherSuit = level === lastLevel && suitOrder.indexOf(suit) > suitOrder.indexOf(lastSuit);
+            return higherLevel || higherSuit;
+        };
+
+        const cueTok = lastPartnerAction?.bid?.token || '';
+        const cueSuit = cueTok.replace(/^[1-7]/, '');
+        const oppSeats = (partnerSeat === 'N' || partnerSeat === 'S') ? ['E', 'W'] : ['N', 'S'];
+        const openingEntry = (auctionHistory || []).find(e => {
+            const t = e?.bid?.token || '';
+            return /^[1-7][CDHS]$/.test(t) && oppSeats.includes(e.position);
+        });
+        const openerSuit = openingEntry?.bid?.token?.replace(/^[1-7]/, '') || null;
+        const michaelsDetected = openerSuit && cueSuit === openerSuit && detectMichaelsCueBid(partnerSeat, lastPartnerAction.bid, auctionHistory, hand);
+
+        const promisedMajors = (() => {
+            if (!michaelsDetected || !openerSuit) return [];
+            if (openerSuit === 'C' || openerSuit === 'D') return ['H', 'S'];
+            if (openerSuit === 'H') return ['S'];
+            if (openerSuit === 'S') return ['H'];
+            return [];
+        })();
+
+        if (promisedMajors.length) {
+            const lengths = hand?.lengths || {};
+            const best = promisedMajors
+                .map(s => ({ s, len: lengths[s] || 0 }))
+                .sort((a, b) => (b.len - a.len) || (a.s === 'H' ? -1 : 1))[0];
+            if (best && best.s) {
+                for (let lvl = 1; lvl <= 7; lvl += 1) {
+                    const tok = `${lvl}${best.s}`;
+                    if (isLegalBid(tok)) {
+                        return {
+                            bid: new window.Bid(tok),
+                            explanation: `Advance partner's Michaels with ${tok} (one-round force)`
+                        };
+                    }
+                }
+            }
+        }
+
+        const sameSide = (seat) => (seat === 'N' || seat === 'S') ? 'NS' : 'EW';
+        const sideTag = sameSide(currentTurn);
+        const lastOurContract = auctionHistory.slice().reverse().find(e => {
+            const tok = e?.bid?.token || 'PASS';
+            if (!/^[1-7]/.test(tok)) return false;
+            if (isCueBidOfOpponentsSuit(e.position, e.bid, auctionHistory)) return false;
+            return sameSide(e.position) === sideTag;
+        });
+        if (lastOurContract) {
+            const strain = lastOurContract.bid.token.replace(/^[1-7]/, '');
+            for (let lvl = 1; lvl <= 7; lvl += 1) {
+                const tok = `${lvl}${strain === 'NT' ? 'NT' : strain}`;
+                if (isLegalBid(tok)) {
+                    return {
+                        bid: new window.Bid(tok),
+                        explanation: `Continue after cue-bid with ${tok} (one-round force)`
+                    };
+                }
+            }
+        }
+
+        const lengths = hand?.lengths || {};
+        const suitPref = ['S', 'H', 'D', 'C', 'NT']
+            .map(s => ({ s, len: lengths[s] || 0, order: suitOrder.indexOf(s) }))
+            .sort((a, b) => (b.len - a.len) || (a.order - b.order));
+
+        for (const entry of suitPref) {
+            const s = entry.s;
+            for (let lvl = 1; lvl <= 7; lvl += 1) {
+                const tok = `${lvl}${s === 'NT' ? 'NT' : s}`;
+                if (isLegalBid(tok)) {
+                    return {
+                        bid: new window.Bid(tok),
+                        explanation: `Forced response after partner cue-bid (${tok})`
+                    };
+                }
+            }
+        }
+
+        const ladder = ['1C', '1D', '1H', '1S', '1NT', '2C', '2D', '2H', '2S', '2NT'];
+        for (const tok of ladder) {
+            if (isLegalBid(tok)) {
+                return {
+                    bid: new window.Bid(tok),
+                    explanation: `Forced response after partner cue-bid (${tok})`
+                };
+            }
+        }
+
+        return null;
+    } catch (_) {
+        return null;
     }
 }
 
@@ -2606,6 +3230,8 @@ function getRecommendedBid() {
         }
         // Ensure dealer is always defined when syncing to engine
         const dealerSeat = dealer || (document.getElementById('dealer')?.value || 'S');
+        // Forced bids injected by convention logic (e.g., Strong 2C sequences)
+        let forcedBid = null;
         // suppressed noisy diagnostics in UI/tests
 
         // Get system recommendation - use current system auction state
@@ -2660,19 +3286,19 @@ function getRecommendedBid() {
         explanation = normalizeExplanationForBid(recommendedBid, explanation, system.currentAuction, 'S');
         // suppressed noisy diagnostics in UI/tests
 
-        // Handle null token (which means Pass). If token is null (engine didn't
-        // find a path and is effectively forced to pass), attempt to use the
-        // trained model as a fallback. This is non-blocking: the UI will be
-        // updated when the prediction resolves. The model integration is
-        // defensive — if TF or the files are unavailable, nothing changes.
+        // Handle null token (engine found no path) or a PASS fallback by trying the model for a better hint.
         const bidDisplay = recommendedBid.token || 'PASS';
-        if ((recommendedBid.token === null || recommendedBid.token === undefined) && !forcedBid) {
+        const shouldTryModelHint = (!forcedBid) && (
+            recommendedBid.token === null ||
+            recommendedBid.token === undefined ||
+            (String(recommendedBid.token).toUpperCase() === 'PASS' && (!explanation || /^pass$/i.test(explanation)))
+        );
+
+        if (shouldTryModelHint) {
             // Kick off async model prediction; update the UI when available.
             predictBidFromModel(currentHands.S, system.currentAuction).then(predTok => {
                 if (!predTok) return; // no prediction available
                 try {
-                    // Clear convention explanation per your request so you can
-                    // later inspect why engine couldn't find a path.
                     const modelBidDisplay = predTok;
                     const modelExplanation = '';
                     // Update legacy panel if present
@@ -2690,6 +3316,19 @@ function getRecommendedBid() {
                 } catch (_) { /* ignore UI update failures */ }
             }).catch(() => {/* ignore prediction errors */ });
         }
+
+        // Apply descriptive Stayman labeling when responder bids 2C over partner's 1NT and no better explanation exists
+        try {
+            const isGeneric = !explanation || isGenericExplanationLabel(explanation);
+            if (isGeneric && recommendedBid && recommendedBid.token === '2C') {
+                const lastNonPass = getLastNonPassBidWithPosition();
+                const partnerSeat = partnerOf(currentTurn);
+                const lastTok = lastNonPass?.bid?.token || '';
+                if (lastNonPass && lastNonPass.position === partnerSeat && lastTok === '1NT') {
+                    explanation = 'Stayman: 2C asking for a 4-card major (8+ HCP)';
+                }
+            }
+        } catch (_) { /* soft-label only */ }
 
         // Display recommendation if the legacy panel exists; otherwise show an inline hint near the status
         const panelBid = document.getElementById('recommendedBidDisplay');
@@ -2780,12 +3419,20 @@ async function predictBidFromModel(hand, auction) {
             // Try synchronous require for Node/CommonJS tests
             const path = require('path');
             const fs = require('fs');
-            const tokPath = path.join(process.cwd(), 'models', 'bid_tokens.json');
-            if (fs.existsSync(tokPath)) tokens = JSON.parse(fs.readFileSync(tokPath, 'utf8'));
+            const candidatePaths = [
+                path.join(process.cwd(), 'models', 'bid_tokens.json'),
+                path.join(process.cwd(), 'bid_tokens.json')
+            ];
+            for (const tokPath of candidatePaths) {
+                if (fs.existsSync(tokPath)) {
+                    tokens = JSON.parse(fs.readFileSync(tokPath, 'utf8'));
+                    break;
+                }
+            }
         } catch (e) {
             // Browser/env fallback: fetch if available
             try {
-                const resp = await fetch('/models/bid_tokens.json');
+                const resp = await fetch('/bid_tokens.json');
                 if (resp && resp.ok) tokens = await resp.json();
             } catch (_) { tokens = null; }
         }
@@ -2954,6 +3601,7 @@ function endAuction() {
     // Show Start Auction button to allow restart (after optional dealer/vul changes)
     const startAuctionBtn = document.getElementById('startAuctionBtn');
     if (startAuctionBtn) {
+        startAuctionBtn.textContent = 'Re-bid';
         startAuctionBtn.style.display = 'inline-block';
     }
 
@@ -3170,6 +3818,8 @@ function updateAuctionStatus() {
             hintBtn.setAttribute('onclick', 'getRecommendedBid()');
         }
 
+        const shouldShowHint = !southHasBidThisAuction;
+
         // Refresh the left-side status text (this clears previous children)
         status.innerHTML = `<span class="status-text">${turnName} to bid</span>`;
 
@@ -3180,7 +3830,7 @@ function updateAuctionStatus() {
                 hintBtn.classList.add('danger');
                 hintBtn.textContent = 'Hint';
                 hintBtn.setAttribute('onclick', 'getRecommendedBid()');
-                hintBtn.style.display = 'inline-block';
+                hintBtn.style.display = shouldShowHint ? 'inline-block' : 'none';
                 status.appendChild(hintBtn);
             }
         } catch (_) { }
@@ -3498,6 +4148,32 @@ function addBidExplanation(position, bid, explanation) {
     // Determine side for styling: we (South), partner (North), opponents (East/West)
     const sideClass = (position === 'S') ? 'we' : (position === 'N' ? 'partner' : 'opponent');
 
+    // If practicing a specific convention, annotate generic cue-bids accordingly (e.g., Michaels)
+    try {
+        const practiceTargets = (typeof window !== 'undefined' && Array.isArray(window.activePracticeTargets)) ? window.activePracticeTargets : (Array.isArray(activePracticeTargets) ? activePracticeTargets : []);
+        if (practiceTargets.includes('Michaels')) {
+            const isCue = isCueBidOfOpponentsSuit(position, bid, auctionHistory);
+            const openerEntry = (auctionHistory || []).find(e => e && e.bid && /^[1-7][CDHS]$/.test(e.bid.token || ''));
+            const openerSuit = openerEntry ? openerEntry.bid.token.replace(/^[1-7]/, '') : null;
+            const openerSeat = openerEntry?.position || null;
+            const openerNS = openerSeat ? (openerSeat === 'N' || openerSeat === 'S') : null;
+            const bidderNS = (position === 'N' || position === 'S');
+            const isOpponents = (openerNS === null) ? true : (openerNS !== bidderNS);
+            const level = parseInt((bidDisplay || '')[0], 10) || 0;
+            if (isCue && isOpponents && level === 2) {
+                if (openerSuit === 'C' || openerSuit === 'D') {
+                    explanation = 'Michaels cue-bid: 5-5 majors over a minor opening';
+                } else if (openerSuit === 'H') {
+                    explanation = 'Michaels cue-bid: spades + a minor (5-5) over 1H';
+                } else if (openerSuit === 'S') {
+                    explanation = 'Michaels cue-bid: hearts + a minor (5-5) over 1S';
+                } else {
+                    explanation = 'Michaels cue-bid: two-suited overcall';
+                }
+            }
+        }
+    } catch (_) { /* best-effort practice annotation */ }
+
     // Normalize explanation for direct 1-level suit overcalls to keep consistency
     try {
         const isOneLevelSuit = /^[1][CDHS]$/.test(bidDisplay);
@@ -3556,6 +4232,21 @@ function addBidExplanation(position, bid, explanation) {
             }
         }
     } catch (_) { /* best-effort enhancement */ }
+
+    // Cue-bid raise labeling: when we bid opponents' suit after partner has shown a suit
+    try {
+        const isCue = isCueBidOfOpponentsSuit(position, bid, auctionHistory);
+        const isGenericCue = !explanation || isGenericExplanationLabel(explanation) || /Cue bid of opponents/i.test(explanation || '');
+        if (isCue && isGenericCue) {
+            const partnerSeat = partnerOf(position);
+            const partnerSuitEntry = auctionHistory.slice().reverse().find(e => e.position === partnerSeat && /^[1-7][CDHS]$/.test(e?.bid?.token || ''));
+            const partnerSuit = partnerSuitEntry ? partnerSuitEntry.bid.token.replace(/^[1-7]/, '') : null;
+            if (partnerSuit) {
+                const names = { C: 'clubs', D: 'diamonds', H: 'hearts', S: 'spades' };
+                explanation = `Cue-bid raise showing support for partner's ${names[partnerSuit] || partnerSuit} (one-round force)`;
+            }
+        }
+    } catch (_) { /* best-effort cue labeling */ }
 
     // Strip generic placeholder labels before rendering to keep UI noise-free
     if (isGenericExplanationLabel(explanation)) {
@@ -4216,9 +4907,19 @@ async function loadAvailableConventions() {
                 }
 
                 const displayName = getConventionDisplayName(conventionKey);
+                // UI should list Unusual NT under Competitive even if engine stores it under notrump_defenses
+                const uiCategory = (conventionKey === 'unusual_nt') ? 'competitive' : categoryKey;
+
+                // Ensure UI category bucket exists when remapping
+                if (uiCategory !== 'general' && !conventionCategories[uiCategory]) {
+                    conventionCategories[uiCategory] = {
+                        name: getCategoryDisplayName(uiCategory),
+                        conventions: []
+                    };
+                }
 
                 availableConventions[displayName] = {
-                    category: categoryKey,
+                    category: uiCategory,
                     key: conventionKey,
                     description: convention.description || getDefaultDescription(conventionKey),
                     enabled: convention.enabled !== false, // Default to enabled unless explicitly disabled
@@ -4226,8 +4927,8 @@ async function loadAvailableConventions() {
                 };
 
                 // Only add to UI categories if not general
-                if (categoryKey !== 'general') {
-                    conventionCategories[categoryKey].conventions.push(displayName);
+                if (uiCategory !== 'general') {
+                    conventionCategories[uiCategory].conventions.push(displayName);
                 }
             });
         });
@@ -4362,6 +5063,53 @@ async function loadAvailableConventions() {
             }
         } catch (e) {
             console.warn('Failed to relocate Meckwell to notrump_defenses:', e);
+        }
+
+        // Ensure Unusual NT always appears under Competitive Bidding in the UI
+        try {
+            const unnName = getConventionDisplayName('unusual_nt');
+            const unnCfg = conventionsConfig?.competitive?.unusual_nt || conventionsConfig?.notrump_defenses?.unusual_nt;
+            const unnEnabled = !(unnCfg?.enabled === false);
+            const unnDesc = unnCfg?.description || getDefaultDescription('unusual_nt');
+
+            if (!conventionCategories['competitive']) {
+                conventionCategories['competitive'] = { name: getCategoryDisplayName('competitive'), conventions: [] };
+            }
+
+            // Create or normalize the convention entry
+            if (!availableConventions[unnName]) {
+                availableConventions[unnName] = {
+                    category: 'competitive',
+                    key: 'unusual_nt',
+                    description: unnDesc,
+                    enabled: unnEnabled,
+                    isGeneral: false
+                };
+            } else {
+                availableConventions[unnName].category = 'competitive';
+                availableConventions[unnName].enabled = unnEnabled;
+                availableConventions[unnName].description = availableConventions[unnName].description || unnDesc;
+            }
+
+            if (!conventionCategories['competitive'].conventions.includes(unnName)) {
+                conventionCategories['competitive'].conventions.push(unnName);
+            }
+
+            // Keep Unusual NT listed immediately after Michaels in the UI
+            const competitiveList = conventionCategories['competitive'].conventions;
+            const reordered = [];
+            const pushIfPresent = (name) => {
+                const idx = competitiveList.indexOf(name);
+                if (idx >= 0) reordered.push(name);
+            };
+            pushIfPresent('Michaels');
+            pushIfPresent(unnName);
+            competitiveList
+                .filter(name => !reordered.includes(name))
+                .forEach(name => reordered.push(name));
+            conventionCategories['competitive'].conventions = reordered;
+        } catch (e) {
+            console.warn('Failed to ensure Unusual NT appears under Competitive:', e);
         }
 
         // Set up mutual exclusivity groups
@@ -4787,11 +5535,51 @@ function updatePracticeConventionSelection(categoryKey, conventionName) {
     pageLog('Current practice selections:', selectedPracticeConventions);
 }
 
+// Normalize common aliases so practice selections and validation stay aligned
+function normalizeConventionLabel(name) {
+    if (!name) return name;
+    const trimmed = String(name).trim();
+    const aliases = {
+        'Strong 2C': 'Strong 2 Clubs',
+        'Strong 2 Club': 'Strong 2 Clubs'
+    };
+    return aliases[trimmed] || trimmed;
+}
+
+function getSelectedPracticeTargets() {
+    try {
+        const values = Object.values(selectedPracticeConventions || {})
+            .filter(Boolean)
+            .map(normalizeConventionLabel);
+        const unique = Array.from(new Set(values));
+
+        // If a practice target is selected but currently disabled, turn it on so generation and
+        // explanations can reflect the chosen convention without requiring a separate enable step.
+        unique.forEach(name => {
+            if (!enabledConventions[name]) {
+                enabledConventions[name] = true;
+            }
+        });
+
+        try { updateSystemConventions(); } catch (_) { /* best-effort sync */ }
+        return unique;
+    } catch (_) {
+        return [];
+    }
+}
+
+function clearPracticeSelections() {
+    selectedPracticeConventions = {};
+    try { createPracticeConventionOptions(); } catch (_) { /* no-op */ }
+    pageLog('Practice convention selections cleared');
+}
+
 // Inline onchange handlers in the Active/Practice Conventions UI need these in global scope
 try {
     if (typeof window !== 'undefined') {
         window.updateConventionStatus = updateConventionStatus;
         window.updatePracticeConventionSelection = updatePracticeConventionSelection;
+        window.clearPracticeSelections = clearPracticeSelections;
     }
 } catch (_) { /* no-op */ }
 
@@ -4914,23 +5702,126 @@ function generateBasicRandomHands() {
     try { if (typeof window !== 'undefined') window.currentHands = currentHands; } catch (_) { }
 }
 
+// Active practice targets used to annotate UI/explanations for the current deal
+let activePracticeTargets = [];
+try { if (typeof window !== 'undefined') window.activePracticeTargets = activePracticeTargets; } catch (_) { }
+
+// Cached pool of pre-generated practice deals (loaded on demand)
+let practiceDealPool = null;
+let practiceDealPoolPromise = null;
+
+async function loadPracticeDealPool() {
+    try {
+        if (practiceDealPool) return practiceDealPool;
+        if (practiceDealPoolPromise) return practiceDealPoolPromise;
+        if (typeof fetch !== 'function') return [];
+        // Use a relative path that works when the app is served from project root
+        practiceDealPoolPromise = fetch('./assets/data/practice_deals.json')
+            .then(res => res.ok ? res.json() : [])
+            .then(data => { practiceDealPool = Array.isArray(data) ? data : []; return practiceDealPool; })
+            .catch(() => []);
+        return practiceDealPoolPromise;
+    } catch (_) {
+        return [];
+    }
+}
+
+function applyStoredDeal(deal, targetLabels) {
+    if (!deal || !deal.hands) return false;
+    try {
+        currentHands.N = new window.Hand(deal.hands.N);
+        currentHands.E = new window.Hand(deal.hands.E);
+        currentHands.S = new window.Hand(deal.hands.S);
+        currentHands.W = new window.Hand(deal.hands.W);
+        try { if (typeof window !== 'undefined') window.currentHands = currentHands; } catch (_) { }
+        activePracticeTargets = Array.isArray(targetLabels) ? targetLabels.slice() : [];
+        try { if (typeof window !== 'undefined') window.activePracticeTargets = activePracticeTargets; } catch (_) { }
+        addPracticeIndicator(targetLabels && targetLabels.length === 1 ? targetLabels[0] : targetLabels);
+        return true;
+    } catch (e) {
+        console.warn('applyStoredDeal failed', e);
+        return false;
+    }
+}
+
 // Public helper to generate a fresh random deal and refresh UI
 function generateRandomHands() {
-    try {
-        resetAuctionForNewDeal();
-        generationMode = 'random';
-        generateBasicRandomHands();
-        displayHands();
-        showAuctionSetup();
-        // Auto-switch to Auction tab after generating a random deal
-        try { switchTab('auction'); } catch (_) { }
-    } catch (e) {
-        console.error('generateRandomHands failed:', e);
+    (async () => {
         try {
+            resetAuctionForNewDeal();
+            generationMode = 'random';
+            activePracticeTargets = [];
+            try { if (typeof window !== 'undefined') window.activePracticeTargets = activePracticeTargets; } catch (_) { }
+            const practiceTargets = getSelectedPracticeTargets();
+            let generated = false;
+            let targetUsed = null;
+
+            if (practiceTargets.length) {
+                const attemptSets = [];
+                if (practiceTargets.length > 1) attemptSets.push(practiceTargets); // try all
+                attemptSets.push(...buildPairs(practiceTargets)); // try pairs
+                attemptSets.push(...practiceTargets.map(t => [t])); // fall back to singles
+
+                for (const set of attemptSets) {
+                    if (generateConventionTargetedHand(set)) {
+                        generated = true;
+                        targetUsed = set;
+                        break;
+                    }
+                }
+            }
+
+            if (practiceTargets.length && !generated) {
+                const pool = await loadPracticeDealPool();
+                const normalizedTargets = practiceTargets.map(normalizeConventionLabel);
+                const matches = (pool || []).filter(d => {
+                    const dealConventions = Array.isArray(d.conventions) ? d.conventions.map(normalizeConventionLabel) : [];
+                    return normalizedTargets.every(t => dealConventions.includes(t));
+                });
+                if (matches.length) {
+                    const shuffled = shuffleArrayInPlace(matches.slice());
+                    for (const picked of shuffled) {
+                        const hydrated = hydrateStoredDeal(picked);
+                        const allOk = hydrated && normalizedTargets.every(t => {
+                            // Skip Bergen validation for stored deals; pool already curated
+                            if (t === 'Bergen Raises') return true;
+                            return validateDealForConvention(hydrated, t);
+                        });
+                        if (!allOk) continue;
+                        if (applyStoredDeal(picked, normalizedTargets)) {
+                            displayHands();
+                            showAuctionSetup();
+                            try { switchTab('auction'); } catch (_) { }
+                            return;
+                        }
+                    }
+                }
+                pageLog(`Failed to generate practice hand for [${practiceTargets.join(', ')}] after multiple attempts`);
+                showError(`Could not generate a practice hand for ${practiceTargets.join(', ')}. Please try again.`);
+                return;
+            }
+
+            if (!generated) {
+                generateBasicRandomHands();
+                addPracticeIndicator(null);
+            } else {
+                addPracticeIndicator(targetUsed);
+                activePracticeTargets = Array.isArray(targetUsed) ? targetUsed.slice() : [targetUsed];
+                try { if (typeof window !== 'undefined') window.activePracticeTargets = activePracticeTargets; } catch (_) { }
+            }
+
             displayHands();
             showAuctionSetup();
-        } catch (_) { }
-    }
+            // Auto-switch to Auction tab after generating a random deal
+            try { switchTab('auction'); } catch (_) { }
+        } catch (e) {
+            console.error('generateRandomHands failed:', e);
+            try {
+                displayHands();
+                showAuctionSetup();
+            } catch (_) { }
+        }
+    })();
 }
 
 function selectTargetConvention(selectedConventions) {
@@ -4946,23 +5837,57 @@ function selectTargetConvention(selectedConventions) {
 
 function generateConventionTargetedHand(target) {
     // Accept a single convention string or an array of conventions
-    const targets = Array.isArray(target) ? target.filter(Boolean) : [target];
+    const targets = (Array.isArray(target) ? target : [target])
+        .map(normalizeConventionLabel)
+        .filter(Boolean);
     if (!targets.length) return false;
 
     // Try a larger number of attempts when aiming to satisfy multiple conventions
-    const maxAttemptsAll = targets.length > 1 ? 150 : 50;
+    const maxAttemptsAll = targets.includes('Bergen Raises') ? 2000 : (targets.length > 1 ? 900 : 900);
+
+    // Fast path for very rare Strong 2C practice hands (22+ HCP opener)
+    if (targets.includes('Strong 2 Clubs')) {
+        if (generateStrong2CPracticeDeal(targets)) {
+            pageLog('Generated Strong 2C practice deal');
+            return true;
+        }
+        // If we somehow fail, fall back to generic loop below
+    }
 
     for (let attempt = 0; attempt < maxAttemptsAll; attempt++) {
         generateBasicRandomHands();
 
         // Must satisfy all selected conventions when multiple were provided
-        const allSatisfied = targets.every(conv => validateHandForConvention(currentHands.S, conv));
+        const allSatisfied = targets.every(conv => validateDealForConvention(currentHands, conv));
         if (allSatisfied) {
             pageLog(`Successfully generated hand for [${targets.join(', ')}] in ${attempt + 1} attempts`);
             return true;
         }
     }
     pageLog(`Failed to generate suitable hand for [${targets.join(', ')}] after ${maxAttemptsAll} attempts`);
+    return false;
+}
+
+// Dedicated generator for Strong 2C practice (rare 22+ HCP deals)
+function generateStrong2CPracticeDeal(targets) {
+    const maxAttempts = 2000;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        const deck = createDeck();
+        shuffleDeck(deck);
+
+        // Deal south first to bias toward success without extra shuffling
+        currentHands.S = new window.Hand(convertCardsToHandString(deck.slice(0, 13)));
+        currentHands.N = new window.Hand(convertCardsToHandString(deck.slice(13, 26)));
+        currentHands.E = new window.Hand(convertCardsToHandString(deck.slice(26, 39)));
+        currentHands.W = new window.Hand(convertCardsToHandString(deck.slice(39, 52)));
+
+        const allSatisfied = targets.every(conv => validateDealForConvention(currentHands, conv));
+        if (allSatisfied) {
+            pageLog(`Strong 2C deal found in ${attempt + 1} attempts`);
+            return true;
+        }
+    }
+    pageLog('Strong 2C generator failed after max attempts');
     return false;
 }
 
@@ -4978,6 +5903,21 @@ function buildPairs(list) {
     return pairs;
 }
 
+// Convert a stored deal (string hands) into Hand objects for validation without mutating UI state
+function hydrateStoredDeal(deal) {
+    try {
+        if (!deal || !deal.hands) return null;
+        const hydrated = {};
+        ['N', 'E', 'S', 'W'].forEach(pos => {
+            const str = deal.hands[pos];
+            hydrated[pos] = str ? new window.Hand(str) : null;
+        });
+        return hydrated;
+    } catch (_) {
+        return null;
+    }
+}
+
 // Fisher-Yates shuffle in-place for arrays
 function shuffleArrayInPlace(arr) {
     for (let i = arr.length - 1; i > 0; i--) {
@@ -4987,9 +5927,81 @@ function shuffleArrayInPlace(arr) {
     return arr;
 }
 
+// Determine if a hand is a valid opening major for Bergen practice (prefer spades over hearts)
+function getOpeningMajorForBergen(hand) {
+    if (!hand || !hand.lengths) return null;
+    const spades = hand.lengths.S || 0;
+    const hearts = hand.lengths.H || 0;
+    const hcp = hand.hcp || 0;
+    if (hcp < 12) return null;
+    if (spades < 5 && hearts < 5) return null;
+    if (spades > hearts && spades >= 5) return 'S';
+    if (hearts > spades && hearts >= 5) return 'H';
+    if (spades >= 5) return 'S'; // tie-break to spades when lengths equal
+    if (hearts >= 5) return 'H';
+    return null;
+}
+
+// Core Bergen Raises suitability check using Hand-like objects (hcp, lengths)
+function isBergenRaisesDeal(hands) {
+    if (!hands) return false;
+    const south = hands.S;
+    const north = hands.N;
+    const west = hands.W;
+    const major = getOpeningMajorForBergen(south);
+    if (!major) return false;
+    const westHcp = west?.hcp || 0;
+    if (westHcp > 10) return false; // West should be weak and likely pass
+    const northSupport = north?.lengths?.[major] || 0;
+    return northSupport >= 4;
+}
+
+// Minimal parser for stored hand strings when window.Hand is unavailable (e.g., during tests)
+function parseHandStringToSummary(str) {
+    if (!str || typeof str !== 'string') return null;
+    const suits = str.trim().split(/\s+/);
+    const order = ['S', 'H', 'D', 'C'];
+    while (suits.length < 4) suits.push('');
+    const lengths = {};
+    const rankMap = { A: 4, K: 3, Q: 2, J: 1 };
+    let hcp = 0;
+    order.forEach((suit, idx) => {
+        const cards = (suits[idx] || '').trim();
+        lengths[suit] = cards ? cards.length : 0;
+        for (const ch of cards) {
+            const up = ch.toUpperCase();
+            hcp += rankMap[up] || 0;
+        }
+    });
+    return { hcp, lengths };
+}
+
+// Validate a stored deal object (string hands) for Bergen Raises tagging
+function isBergenRaisesDealFromStrings(handsBySeat) {
+    try {
+        if (!handsBySeat) return false;
+        const hydrate = (seat) => {
+            const raw = handsBySeat[seat];
+            if (!raw) return null;
+            try {
+                if (typeof window !== 'undefined' && window.Hand) {
+                    return new window.Hand(raw);
+                }
+            } catch (_) { /* fallback to parser */ }
+            return parseHandStringToSummary(raw);
+        };
+        const hands = { N: hydrate('N'), E: hydrate('E'), S: hydrate('S'), W: hydrate('W') };
+        return isBergenRaisesDeal(hands);
+    } catch (_) {
+        return false;
+    }
+}
+
 function validateHandForConvention(southHand, conventionName) {
-    switch (conventionName) {
+    const normalized = normalizeConventionLabel(conventionName);
+    switch (normalized) {
         case 'Strong 2 Clubs':
+        case 'Strong 2C':
             return southHand.hcp >= 22;
 
         case 'Weak 2 Bids':
@@ -5009,25 +6021,32 @@ function validateHandForConvention(southHand, conventionName) {
         case 'Gerber':
         case 'Regular Blackwood':
         case 'RKC Blackwood 1430':
-            return southHand.hcp >= 16; // Strong enough to consider slam
+            return southHand.hcp >= 18; // Base opener strength; full check done with both hands
 
         case 'DONT':
         case 'Meckwell':
             return southHand.hcp >= 8; // Enough to interfere over 1NT
 
-        case 'Unusual NT':
-            return southHand.hcp >= 8 &&
-                southHand.lengths.C >= 5 && southHand.lengths.D >= 5;
+        case 'Unusual NT': {
+            // Require two lowest unbid suits. Accept any 5-5 among {C,D}, {C,H}, {D,H}.
+            if (!southHand) return false;
+            const hcpOk = southHand.hcp >= 8;
+            const cd = (southHand.lengths.C || 0) >= 5 && (southHand.lengths.D || 0) >= 5;
+            const ch = (southHand.lengths.C || 0) >= 5 && (southHand.lengths.H || 0) >= 5;
+            const dh = (southHand.lengths.D || 0) >= 5 && (southHand.lengths.H || 0) >= 5;
+            return hcpOk && (cd || ch || dh);
+        }
         case 'Unusual NT (over minors)':
             return southHand.hcp >= 8 &&
                 southHand.lengths.H >= 5 &&
                 (southHand.lengths.C >= 5 || southHand.lengths.D >= 5);
 
-        case 'Michaels':
-            return southHand.hcp >= 8 &&
-                ((southHand.lengths.H >= 5 && southHand.lengths.S >= 5) ||
-                    (southHand.lengths.H >= 5 && (southHand.lengths.C >= 5 || southHand.lengths.D >= 5)) ||
-                    (southHand.lengths.S >= 5 && (southHand.lengths.C >= 5 || southHand.lengths.D >= 5)));
+        case 'Michaels': {
+            if (!southHand) return false;
+            const hcpOk = southHand.hcp >= 8;
+            const majors55 = (southHand.lengths.H || 0) >= 5 && (southHand.lengths.S || 0) >= 5;
+            return hcpOk && majors55;
+        }
 
         case 'Negative Doubles':
         case 'Responsive Doubles':
@@ -5045,11 +6064,91 @@ function validateHandForConvention(southHand, conventionName) {
                 (southHand.lengths.H >= 3 || southHand.lengths.S >= 3); // Need major support
 
         case 'Bergen Raises':
-            // Hands suitable for Bergen raises as responder: 4+ card support in a major and up to invitational values
-            return southHand.hcp <= 12 && (southHand.lengths.H >= 4 || southHand.lengths.S >= 4);
+            // South should be able to open a major for Bergen sequences
+            return !!getOpeningMajorForBergen(southHand);
 
         default:
             return southHand.hcp >= 12; // Generic opening hand strength
+    }
+}
+
+// Lightweight NT helpers used only for practice hand generation
+function isBalancedForNotrump(hand) {
+    if (!hand || !hand.lengths) return false;
+    const lens = ['S', 'H', 'D', 'C'].map(s => hand.lengths[s] || 0).sort((a, b) => b - a);
+    const is4333 = lens[0] === 4 && lens[1] === 3 && lens[2] === 3 && lens[3] === 3;
+    const is4432 = lens[0] === 4 && lens[1] === 4 && lens[2] === 3 && lens[3] === 2;
+    const is5332 = lens[0] === 5 && lens[1] === 3 && lens[2] === 3 && lens[3] === 2;
+    const include5422 = !!(system?.conventions?.config?.general?.balanced_shapes?.include_5422);
+    const is5422 = include5422 && lens[0] === 5 && lens[1] === 4 && lens[2] === 2 && lens[3] === 2;
+    return is4333 || is4432 || is5332 || is5422;
+}
+
+function isOneNTOpener(hand) {
+    // Use standard 15-17 HCP range for 1NT openings with configured balanced shapes
+    return !!hand && isBalancedForNotrump(hand) && hand.hcp >= 15 && hand.hcp <= 17;
+}
+
+function validateNotrumpResponseDeal(hands, conventionName) {
+    // South is the opener in practice mode; North is the responder
+    const opener = hands?.S;
+    const responder = hands?.N;
+
+    if (!isOneNTOpener(opener)) return false;
+
+    switch (conventionName) {
+        case 'Stayman': {
+            const hasFourCardMajor = responder && ((responder.lengths?.H || 0) >= 4 || (responder.lengths?.S || 0) >= 4);
+            const responderHcp = responder?.hcp || 0;
+            return hasFourCardMajor && responderHcp >= 8; // enough values to look for a 4-card major
+        }
+        case 'Jacoby Transfers': {
+            // Responder shows a 5-card major
+            return responder && ((responder.lengths?.H || 0) >= 5 || (responder.lengths?.S || 0) >= 5);
+        }
+        case 'Texas Transfers': {
+            // Responder has a 6-card major for a direct game try in a major
+            return responder && ((responder.lengths?.H || 0) >= 6 || (responder.lengths?.S || 0) >= 6);
+        }
+        case 'Minor Suit Transfers': {
+            // Responder has a long minor (6+) for 2S/2NT transfer sequences
+            return responder && ((responder.lengths?.C || 0) >= 6 || (responder.lengths?.D || 0) >= 6);
+        }
+        default:
+            return true; // fall through to opener check already satisfied
+    }
+}
+
+function validateDealForConvention(hands, conventionName) {
+    const normalized = normalizeConventionLabel(conventionName);
+    const southHand = hands?.S;
+    const northHand = hands?.N;
+    switch (normalized) {
+        case 'Michaels': {
+            const opener = hands?.W;
+            const overcaller = southHand;
+            const openerOk = opener && opener.hcp >= 12;
+            const majors55 = overcaller && (overcaller.lengths?.H || 0) >= 5 && (overcaller.lengths?.S || 0) >= 5;
+            const hcpOk = overcaller && (overcaller.hcp || 0) >= 8;
+            return openerOk && hcpOk && majors55;
+        }
+        case 'Regular Blackwood':
+        case 'RKC Blackwood 1430': {
+            if (!southHand || !northHand) return false;
+            const combined = (southHand.hcp || 0) + (northHand.hcp || 0);
+            const southStrong = (southHand.hcp || 0) >= 19;
+            const hasFit = ['S', 'H', 'D', 'C'].some(s => (southHand.lengths?.[s] || 0) + (northHand.lengths?.[s] || 0) >= 8);
+            return southStrong && combined >= 30 && hasFit;
+        }
+        case 'Stayman':
+        case 'Jacoby Transfers':
+        case 'Texas Transfers':
+        case 'Minor Suit Transfers':
+            return validateNotrumpResponseDeal(hands, normalized);
+        case 'Bergen Raises':
+            return isBergenRaisesDeal(hands);
+        default:
+            return validateHandForConvention(southHand, normalized);
     }
 }
 
@@ -5835,7 +6934,6 @@ function renderPlayHand(containerId, seat, clickable) {
                             }
                             // ensure stacking order
                             btn.style.position = 'relative';
-                            btn.style.zIndex = String(idx + 1);
                         } catch (_) { }
                         row.appendChild(btn);
                         idx++;
@@ -6521,6 +7619,11 @@ async function pickAutoCardFor(seat) {
                 const winnerOnOurSide = current ? sameSide(winnerSeat) === ourSide : false;
                 const winnerSuit = current ? (current.code || '').slice(-1) : null;
                 if (winnerOnOurSide && winnerSuit === leadSuit && (!winningOptions.length || winnerSeat === partner)) {
+                    const partnerLedLow = winnerSeat === partner && !leadIsHonor;
+                    const winningHonor = winningOptions.find(c => ['A', 'K', 'Q', 'J'].includes(c[0]));
+                    if (partnerLedLow && winningHonor) {
+                        return winningOptions.sort((a, b) => rankIndex(a) - rankIndex(b))[0];
+                    }
                     return pickLowestSpot(leadPlays) || sortAsc(leadPlays)[0];
                 }
             } catch (_) { }
@@ -7350,8 +8453,6 @@ function replayHand() {
 
 function newDealFromPlay() {
     try {
-        const proceed = window.confirm('Start a new deal? Current play will be discarded.');
-        if (!proceed) return;
         // Generate a new random deal and move to Auction tab to bid anew
         generateRandomHands();
         switchTab('auction');
@@ -7394,3 +8495,16 @@ try {
         });
     }
 } catch (_) { /* ignore in non-browser contexts */ }
+
+// Expose guard helpers for tests (CommonJS-friendly via jest strip loader)
+try {
+    if (typeof module !== 'undefined' && module.exports) {
+        module.exports.applyResponderMajorGuard = applyResponderMajorGuard;
+        module.exports.applyOvercallLengthGuard = applyOvercallLengthGuard;
+        module.exports.applyTwoLevelFreeBidGuard = applyTwoLevelFreeBidGuard;
+        // Test helpers for practice focus generation
+        module.exports.generateConventionTargetedHand = generateConventionTargetedHand;
+        module.exports.validateDealForConvention = validateDealForConvention;
+        module.exports.currentHands = currentHands;
+    }
+} catch (_) { /* non-fatal */ }

@@ -6,8 +6,8 @@
  */
 
 const { makeTestHand } = require('./test-helpers');
-const { SAYCBiddingSystem } = require('../js/combined-bidding-system');
-const { Bid, Auction } = require('../js/bridge-types');
+const { SAYCBiddingSystem } = require('../assets/js/combined-bidding-system');
+const { Bid, Auction } = require('../assets/js/bridge-types');
 
 function setupAuctionFor1SOvercall() {
   const system = new SAYCBiddingSystem();

@@ -93,7 +93,7 @@ function loadApp() {
   window.showTab = () => {};
 
   // Load app.js which defines endAuction/goToPlay/renderPlayTab/etc.
-  evalInWindow(window, path.join(__dirname, '..', 'js', 'app.js'));
+  evalInWindow(window, path.join(__dirname, '..', 'assets', 'js', 'app.js'));
 }
 
 function setAuctionHistory(entries) {

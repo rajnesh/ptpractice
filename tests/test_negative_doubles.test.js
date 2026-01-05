@@ -1,6 +1,6 @@
 const { makeTestHand } = require('./test-helpers');
-const { SAYCBiddingSystem } = require('../js/combined-bidding-system');
-const { Bid } = require('../js/bridge-types');
+const { SAYCBiddingSystem } = require('../assets/js/combined-bidding-system');
+const { Bid } = require('../assets/js/bridge-types');
 
 /**
  * Negative doubles after our opening and their overcall.
@@ -27,7 +27,7 @@ describe('Negative Doubles after overcall', () => {
   });
 
   test('8 HCP with one 4-card major (hearts) over 1C - 1S -> Double', () => {
-    system.currentAuction = new (require('../js/bridge-types').Auction)();
+    system.currentAuction = new (require('../assets/js/bridge-types').Auction)();
     system.currentAuction.add(new Bid('1C'));
     system.currentAuction.add(new Bid('1S'));
     const hand = makeTestHand(2, 4, 4, 3, 8); // 4 hearts
@@ -36,7 +36,7 @@ describe('Negative Doubles after overcall', () => {
   });
 
   test('10 HCP with one 4-card major (hearts) over 1C - 2S -> Double', () => {
-    system.currentAuction = new (require('../js/bridge-types').Auction)();
+    system.currentAuction = new (require('../assets/js/bridge-types').Auction)();
     system.currentAuction.add(new Bid('1C'));
     system.currentAuction.add(new Bid('2S'));
     const hand = makeTestHand(2, 4, 4, 3, 10); // 4 hearts
@@ -45,7 +45,7 @@ describe('Negative Doubles after overcall', () => {
   });
 
   test('12 HCP with one 4-card major (hearts) over 1C - 2S -> Double', () => {
-    system.currentAuction = new (require('../js/bridge-types').Auction)();
+    system.currentAuction = new (require('../assets/js/bridge-types').Auction)();
     system.currentAuction.add(new Bid('1C'));
     system.currentAuction.add(new Bid('2S'));
     const hand = makeTestHand(2, 4, 4, 3, 12); // 4 hearts
@@ -54,7 +54,7 @@ describe('Negative Doubles after overcall', () => {
   });
 
   test('16 HCP with 4 hearts over 1C - 1S -> Negative Double (responder should not pass)', () => {
-    system.currentAuction = new (require('../js/bridge-types').Auction)();
+    system.currentAuction = new (require('../assets/js/bridge-types').Auction)();
     system.currentAuction.add(new Bid('1C'));
     system.currentAuction.add(new Bid('1S'));
     const hand = makeTestHand(2, 4, 4, 3, 16);
@@ -63,7 +63,7 @@ describe('Negative Doubles after overcall', () => {
   });
 
   test('Both 4-card majors over 1C - 1D -> Double (shows both majors)', () => {
-    system.currentAuction = new (require('../js/bridge-types').Auction)();
+    system.currentAuction = new (require('../assets/js/bridge-types').Auction)();
     system.currentAuction.add(new Bid('1C'));
     system.currentAuction.add(new Bid('1D'));
     const hand = makeTestHand(4, 4, 3, 2, 8); // 4-4 majors
@@ -72,7 +72,7 @@ describe('Negative Doubles after overcall', () => {
   });
 
   test('No 4-card major over 1C - 1S -> Not a Double', () => {
-    system.currentAuction = new (require('../js/bridge-types').Auction)();
+    system.currentAuction = new (require('../assets/js/bridge-types').Auction)();
     system.currentAuction.add(new Bid('1C'));
     system.currentAuction.add(new Bid('1S'));
     const hand = makeTestHand(3, 3, 4, 3, 10); // No 4-card major
@@ -93,7 +93,7 @@ describe('Negative Doubles after overcall', () => {
   });
 
   test('5-card major not biddable at 1-level over 1C - 1S -> Double', () => {
-    system.currentAuction = new (require('../js/bridge-types').Auction)();
+    system.currentAuction = new (require('../assets/js/bridge-types').Auction)();
     system.currentAuction.add(new Bid('1C'));
     system.currentAuction.add(new Bid('1S'));
     const hand = makeTestHand(2, 5, 3, 3, 10); // 5 hearts; cannot bid 1H at this point

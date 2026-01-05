@@ -99,7 +99,7 @@ describe('Preview legality filtering (system.isLegal) during system bid', () => 
     installStubSystem({ recommendation: '1C', legalityMap: { '1C': false } });
 
     // Load app.js into the window context and initialize minimal state
-    evalInWindow(window, path.join(__dirname, '..', 'js', 'app.js'));
+    evalInWindow(window, path.join(__dirname, '..', 'assets', 'js', 'app.js'));
 
     // Prevent unrelated UI flows from failing in tests
     window.switchTab = () => {};

@@ -1,6 +1,6 @@
 const { makeHandFromPattern } = require('./test-helpers');
-const { SAYCBiddingSystem } = require('../js/combined-bidding-system');
-const { Bid } = require('../js/bridge-types');
+const { SAYCBiddingSystem } = require('../assets/js/combined-bidding-system');
+const { Bid } = require('../assets/js/bridge-types');
 
 describe('Auction regression coverage for Rule-of-20 and Drury handling', () => {
   let system;

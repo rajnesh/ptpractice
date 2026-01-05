@@ -7,7 +7,7 @@ function evalInWindow(win, filePath) { const src = fs.readFileSync(filePath, 'ut
 class StubCard { constructor(rank, suit) { this.rank = rank; this.suit = suit; } }
 class StubHand { constructor(map) { this.suitBuckets = { S: [], H: [], D: [], C: [] }; if (!map) return;['S', 'H', 'D', 'C'].forEach(s => { const arr = map[s] || []; this.suitBuckets[s] = arr.map(r => new StubCard(r, s)); }); } }
 function installCardSVG(win) { win.CardSVG = { render: (code, opts) => { const el = win.document.createElement('div'); el.className = 'card-svg-stub'; return el; } }; }
-function loadApp(win) { win.Card = StubCard; win.Hand = StubHand; installCardSVG(win); win.document.body.innerHTML = '<div id="trickArea"></div>'; evalInWindow(win, path.join(__dirname, '..', 'js', 'app.js')); }
+function loadApp(win) { win.Card = StubCard; win.Hand = StubHand; installCardSVG(win); win.document.body.innerHTML = '<div id="trickArea"></div>'; evalInWindow(win, path.join(__dirname, '..', 'assets', 'js', 'app.js')); }
 
 describe('Repro: declarer leads high to establish winners', () => {
   test('Declarer (N) leads A when combined honors favor establishing', async () => {

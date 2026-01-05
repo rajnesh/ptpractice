@@ -5,16 +5,25 @@ yarn-debug.log*
 yarn-error.log*
 models/
 
-# Coverage directory used by tools like istanbul
+
 coverage/
 .nyc_output
 logs/
+assets/videos/
+assets/gallery/
+assets/images/
+videos/
+images/
+gallery/
+
 
 # Runtime data
 pids
 *.pid
 *.seed
 *.pid.lock
+*.mp4
+*.jpeg
 
 # Optional npm cache directory
 .npm

@@ -1,6 +1,6 @@
 const { makeHandFromRanks } = require('./test-helpers');
-const { SAYCBiddingSystem } = require('../js/combined-bidding-system');
-const { Bid } = require('../js/bridge-types');
+const { SAYCBiddingSystem } = require('../assets/js/combined-bidding-system');
+const { Bid } = require('../assets/js/bridge-types');
 
 /**
  * Ensure responder with 4+ spade support and 6-9 points raises over 1S (does not pass).

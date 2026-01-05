@@ -21,7 +21,7 @@ class StubHand {
 }
 
 function installCardSVG(win) { win.CardSVG = { render: (code, opts) => { const el = win.document.createElement('div'); el.className = 'card-svg-stub'; return el; } }; }
-function loadApp(win) { win.Card = StubCard; win.Hand = StubHand; installCardSVG(win); win.document.body.innerHTML = '<div id="trickArea"></div>'; evalInWindow(win, path.join(__dirname, '..', 'js', 'app.js')); }
+function loadApp(win) { win.Card = StubCard; win.Hand = StubHand; installCardSVG(win); win.document.body.innerHTML = '<div id="trickArea"></div>'; evalInWindow(win, path.join(__dirname, '..', 'assets', 'js', 'app.js')); }
 
 describe('Repro: partner-led small heart then East should take A♥', () => {
   test('East overtakes with A♥ when partner led small heart', async () => {

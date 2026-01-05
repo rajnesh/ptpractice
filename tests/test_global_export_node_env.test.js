@@ -6,7 +6,7 @@
 
 test('combined-bidding-system global export branch sets globals in Node env', () => {
   // eslint-disable-next-line global-require
-  const mod = require('../js/combined-bidding-system');
+  const mod = require('../assets/js/combined-bidding-system');
   // Ensure global assignments occurred
   expect(global.BiddingSystem).toBeDefined();
   expect(global.SAYCBiddingSystem).toBeDefined();

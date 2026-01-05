@@ -32,7 +32,7 @@ function loadApp(win) {
   win.Hand = StubHand;
   installCardSVG(win);
   win.document.body.innerHTML = '<div id="trickArea"></div>';
-  evalInWindow(win, path.join(__dirname, '..', 'js', 'app.js'));
+  evalInWindow(win, path.join(__dirname, '..', 'assets', 'js', 'app.js'));
 }
 
 describe('Repro: partner-led J then East should not overtake with Q', () => {

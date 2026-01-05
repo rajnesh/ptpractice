@@ -1,5 +1,5 @@
 const { makeTestHand, buildAuction } = require('./test-helpers');
-const { SAYCBiddingSystem } = require('../js/combined-bidding-system');
+const { SAYCBiddingSystem } = require('../assets/js/combined-bidding-system');
 
 describe('Fix 1NT responder labeling', () => {
   let system;

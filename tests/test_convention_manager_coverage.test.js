@@ -1,5 +1,5 @@
-const { ConventionCard } = require('../js/convention-manager');
-const { Auction, Bid, Hand } = require('../js/bridge-types');
+const { ConventionCard } = require('../assets/js/convention-manager');
+const { Auction, Bid, Hand } = require('../assets/js/bridge-types');
 const { makeCurrentBidAligned } = require('./test-helpers');
 
 function makeHandFromStrings(s, h, d, c) {

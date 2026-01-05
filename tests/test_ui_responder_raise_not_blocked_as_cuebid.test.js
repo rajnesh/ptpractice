@@ -89,7 +89,7 @@ describe('Responder raise is not misclassified as Michaels cue-bid', () => {
     installStubSystem();
 
     // Load app and initialize
-    evalInWindow(window, path.join(__dirname, '..', 'js', 'app.js'));
+    evalInWindow(window, path.join(__dirname, '..', 'assets', 'js', 'app.js'));
     window.switchTab = () => { };
     window.initializeSystem();
 

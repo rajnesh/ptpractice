@@ -1,6 +1,6 @@
 const { makeHandFromPattern } = require('./test-helpers');
-const { SAYCBiddingSystem } = require('../js/combined-bidding-system');
-const { Bid, Auction } = require('../js/bridge-types');
+const { SAYCBiddingSystem } = require('../assets/js/combined-bidding-system');
+const { Bid, Auction } = require('../assets/js/bridge-types');
 
 describe('Regression: seat-awareness and opener-rebid explanations', () => {
   test('Explicit-seat opener -> responder prefers natural 2-level new suit (no Michaels)', () => {

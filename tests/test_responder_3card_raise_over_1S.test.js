@@ -1,6 +1,6 @@
 const { makeHandFromRanks } = require('./test-helpers');
-const { SAYCBiddingSystem } = require('../js/combined-bidding-system');
-const { Bid } = require('../js/bridge-types');
+const { SAYCBiddingSystem } = require('../assets/js/combined-bidding-system');
+const { Bid } = require('../assets/js/bridge-types');
 
 /**
  * Responder with exactly 3 spades and 7 HCP after 1S should prefer a simple raise to 2S (fit-first),

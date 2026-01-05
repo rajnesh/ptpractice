@@ -83,7 +83,7 @@ describe('UI smoke test: initializeSystem boot', () => {
   });
 
   test('initializeSystem exists and renders a hand', () => {
-    const appPath = path.resolve(__dirname, '../js/app.js');
+    const appPath = path.resolve(__dirname, '../assets/js/app.js');
     const code = fs.readFileSync(appPath, 'utf8');
 
     // Run app.js code in a VM context bound to window

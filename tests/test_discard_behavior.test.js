@@ -33,7 +33,7 @@ function loadApp(win) {
   installCardSVG(win);
   // Provide minimal DOM hooks used by app.js
   win.document.body.innerHTML = '<div id="trickArea"></div>';
-  evalInWindow(win, path.join(__dirname, '..', 'js', 'app.js'));
+  evalInWindow(win, path.join(__dirname, '..', 'assets', 'js', 'app.js'));
 }
 
 describe('Discard behavior (unit)', () => {

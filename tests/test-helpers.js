@@ -4,12 +4,12 @@
 
 // Node.js requires for testing
 if (typeof require !== 'undefined') {
-    global.Card = require('../js/bridge-types.js').Card;
-    global.Hand = require('../js/bridge-types.js').Hand;
-    global.Bid = require('../js/bridge-types.js').Bid;
-    global.Auction = require('../js/bridge-types.js').Auction;
-    global.ConventionCard = require('../js/convention-manager.js').ConventionCard;
-    const combinedSystem = require('../js/combined-bidding-system.js');
+    global.Card = require('../assets/js/bridge-types.js').Card;
+    global.Hand = require('../assets/js/bridge-types.js').Hand;
+    global.Bid = require('../assets/js/bridge-types.js').Bid;
+    global.Auction = require('../assets/js/bridge-types.js').Auction;
+    global.ConventionCard = require('../assets/js/convention-manager.js').ConventionCard;
+    const combinedSystem = require('../assets/js/combined-bidding-system.js');
     global.BiddingSystem = combinedSystem.BiddingSystem;
     global.SAYCBiddingSystem = combinedSystem.SAYCBiddingSystem;
 }

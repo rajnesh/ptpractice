@@ -5,7 +5,7 @@ const path = require('path');
 
 // Evaluate app.js in an IIFE to mimic module scoping; explicitly expose hooks needed for the test
 function evalAppModuleLike(win) {
-    const src = fs.readFileSync(path.join(__dirname, '..', 'js', 'app.js'), 'utf8');
+    const src = fs.readFileSync(path.join(__dirname, '..', 'assets', 'js', 'app.js'), 'utf8');
     win.eval(`(function(){${src}\nwindow.__testHooks = { loadFallbackConventions, createConventionCheckboxes };}).call(window);`);
 }
 

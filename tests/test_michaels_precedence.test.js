@@ -1,5 +1,5 @@
-const { Hand, Bid, Auction } = require('../js/bridge-types');
-const { SAYCBiddingSystem } = require('../js/combined-bidding-system');
+const { Hand, Bid, Auction } = require('../assets/js/bridge-types');
+const { SAYCBiddingSystem } = require('../assets/js/combined-bidding-system');
 
 // Ensure global window is available for constructors used in engine
 global.window = global.window || {};

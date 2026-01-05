@@ -1,8 +1,8 @@
 /**
  * @jest-environment jsdom
  */
-const { SAYCBiddingSystem } = require('../js/combined-bidding-system');
-const { Auction, Bid, Hand } = require('../js/bridge-types');
+const { SAYCBiddingSystem } = require('../assets/js/combined-bidding-system');
+const { Auction, Bid, Hand } = require('../assets/js/bridge-types');
 
 function makeSystem(dealer='S', ourSeat='S') {
   const sys = new SAYCBiddingSystem();

@@ -4,8 +4,8 @@
  */
 
 const { makeTestHand } = require('./test-helpers');
-const { SAYCBiddingSystem } = require('../js/combined-bidding-system');
-const { Bid, Auction } = require('../js/bridge-types');
+const { SAYCBiddingSystem } = require('../assets/js/combined-bidding-system');
+const { Bid, Auction } = require('../assets/js/bridge-types');
 
 const HCP_VALUES = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18];
 

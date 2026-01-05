@@ -1,5 +1,5 @@
-const { SAYCBiddingSystem } = require('../js/combined-bidding-system');
-const { Bid, Hand } = require('../js/bridge-types');
+const { SAYCBiddingSystem } = require('../assets/js/combined-bidding-system');
+const { Bid, Hand } = require('../assets/js/bridge-types');
 
 // Helper: set up a simple auction with dealer/ourSeat for seat-aware logic
 function setupAuction(system, sequence, dealer = 'S', ourSeat = 'N') {

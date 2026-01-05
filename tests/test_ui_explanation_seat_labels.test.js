@@ -86,7 +86,7 @@ describe('Seat-aware explanation labels', () => {
 
         installStubSystem({ recommendation: '1C' });
 
-        evalInWindow(window, path.join(__dirname, '..', 'js', 'app.js'));
+        evalInWindow(window, path.join(__dirname, '..', 'assets', 'js', 'app.js'));
         window.switchTab = () => { };
         window.initializeSystem();
 

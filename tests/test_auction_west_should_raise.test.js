@@ -2,9 +2,9 @@
 
 const path = require('path');
 
-const types = require(path.join(__dirname, '..', 'js', 'bridge-types.js'));
-const conv = require(path.join(__dirname, '..', 'js', 'convention-manager.js'));
-const combined = require(path.join(__dirname, '..', 'js', 'combined-bidding-system.js'));
+const types = require(path.join(__dirname, '..', 'assets', 'js', 'bridge-types.js'));
+const conv = require(path.join(__dirname, '..', 'assets', 'js', 'convention-manager.js'));
+const combined = require(path.join(__dirname, '..', 'assets', 'js', 'combined-bidding-system.js'));
 
 class StubCard { constructor(rank, suit) { this.rank = rank; this.suit = suit; } }
 class StubHand {

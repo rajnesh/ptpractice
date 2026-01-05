@@ -1,6 +1,6 @@
 const { makeHandFromPattern, makeTestHand, buildAuction } = require('./test-helpers');
-const { SAYCBiddingSystem } = require('../js/combined-bidding-system');
-const { Bid, Hand, Auction } = require('../js/bridge-types');
+const { SAYCBiddingSystem } = require('../assets/js/combined-bidding-system');
+const { Bid, Hand, Auction } = require('../assets/js/bridge-types');
 
 describe('Additional SAYC branches coverage', () => {
   describe('Responder after opener\'s 2NT rebid (1m - 1M - 2NT)', () => {

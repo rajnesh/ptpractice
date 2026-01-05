@@ -1,4 +1,4 @@
-const { Hand } = require('../js/bridge-types');
+const { Hand } = require('../assets/js/bridge-types');
 
 describe('Hand parsing with voids', () => {
   test('Dash "-" denotes a true void (0 cards) and awards 3 DP', () => {

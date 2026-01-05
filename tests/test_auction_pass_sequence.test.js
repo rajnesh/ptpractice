@@ -15,11 +15,11 @@ describe('Auction pass sequence', () => {
         `;
 
         // Minimal window stubs used by app.js and combined-bidding-system
-        global.window.Hand = class {};
-        global.window.Bid = class { constructor(t){ this.token = t || 'PASS'; } };
+        global.window.Hand = class { };
+        global.window.Bid = class { constructor(t) { this.token = t || 'PASS'; } };
 
         // Load app.js into a VM context bound to the jest jsdom window
-        const appCode = fs.readFileSync(path.resolve(__dirname, '..', 'js', 'app.js'), 'utf8');
+        const appCode = fs.readFileSync(path.resolve(__dirname, '..', 'assets', 'js', 'app.js'), 'utf8');
         const context = vm.createContext({ window: global.window, document: global.document, console, setTimeout, clearTimeout });
         vm.runInContext(appCode, context, { filename: 'app.js' });
 
